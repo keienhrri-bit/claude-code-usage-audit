@@ -1,0 +1,19 @@
+{
+  "name": "claude-code-usage-audit",
+  "version": "0.1.0",
+  "description": "Where did my Claude Code usage go? Splits the main agent's usage from local Claude Code and Codex logs into setup work, dispatching and real work; lists subagents and cache rewrites separately.",
+  "type": "module",
+  "bin": {
+    "claude-code-usage-audit": "bin/claude-code-usage-audit.js",
+    "cc-usage-audit": "bin/claude-code-usage-audit.js"
+  },
+  "files": ["bin", "src", "data", "examples", "README.md", "README.zh-CN.md", "CHANGELOG.md", "LICENSE"],
+  "scripts": {
+    "test": "node --test",
+    "demo": "node bin/claude-code-usage-audit.js --claude-dir examples/logs/claude/projects --codex-dir examples/logs/codex/sessions --ledger examples/ledger.jsonl --tz UTC"
+  },
+  "engines": { "node": ">=20" },
+  "keywords": ["claude-code", "codex", "usage", "tokens", "subagents", "prompt-cache", "cli"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/keienhrri-bit/claude-code-usage-audit.git" }
+}

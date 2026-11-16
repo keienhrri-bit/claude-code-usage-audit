@@ -1,0 +1,48 @@
+{
+  "_about": "Default classification. Each tool call is tested against 'rules' in order (dispatch rules first, so a command that launches a worker counts as dispatch even when it runs from a script under .claude/skills, while editing that script counts as orchestration; add your own launcher scripts with prependRules and extraMarkers in a --config file); the first match gives its category, no match gives 'default'. A turn with several tool calls takes the category that comes first in 'categories'. A turn with no tool calls inherits the previous turn's category in the same session when 'sticky' is true. Patterns are JavaScript regular expressions, matched case-insensitively against the tool input lower-cased with backslashes turned into '/'.",
+  "categories": [
+    "orchestration",
+    "dispatch",
+    "work"
+  ],
+  "labels": {
+    "orchestration": "building / maintaining the agent setup (skills, agents, hooks, settings, CLAUDE.md, dispatch scripts, usage tooling)",
+    "dispatch": "dispatch operations (launching subagents / other CLIs, writing briefs, reading reports, verifying)",
+    "work": "everything else: the actual work"
+  },
+  "default": "work",
+  "sticky": true,
+  "attributionAsDispatch": true,
+  "rules": [
+    {
+      "category": "dispatch",
+      "note": "Claude Code subagents and messages to them",
+      "tool": "^(agent|task|sendmessage)$"
+    },
+    {
+      "category": "dispatch",
+      "note": "handing work to another agent CLI",
+      "tool": "^(bash|powershell|shell|exec_command|exec|local_shell)$",
+      "match": "\\bcodex\\s+exec\\b|(^|[\\s;&|\"'(])agy(\\.exe|\\.cmd)?\\s|\\bclaude\\s+(-p|--print)\\b|\\bgemini\\s+(-p|--prompt)\\b"
+    },
+    {
+      "category": "orchestration",
+      "note": "touching agent configuration: skills, agents, commands, hooks, settings, memory files, MCP config",
+      "match": "(^|[\\s\"'/~])\\.(claude|codex)/(skills|agents|commands|hooks|plugins|prompts|rules)/|\\.(claude|codex)/(settings(\\.local)?\\.json|config\\.toml|claude\\.md|agents\\.md|keybindings\\.json)|(^|[/\\s\"'])(claude|agents)\\.md\\b|\\.mcp\\.json|/skills/[^/\\s\"']+/skill\\.md"
+    },
+    {
+      "category": "orchestration",
+      "note": "running usage meters and agent-setup commands",
+      "tool": "^(bash|powershell|shell|exec_command|exec|local_shell)$",
+      "match": "\\bccusage\\b|claude-code-usage-audit|\\bclaude\\s+(mcp|config|plugin)\\b|\\bcodex\\s+(mcp|config|login)\\b|/usage\\b"
+    }
+  ],
+  "sessionRules": [],
+  "markers": [
+    { "label": "claude-subagent", "tool": "^(agent|task)$" },
+    { "label": "codex-exec", "tool": "^(bash|powershell|shell|exec_command|exec|local_shell)$", "match": "\\bcodex\\s+exec\\b" },
+    { "label": "agy", "tool": "^(bash|powershell|shell|exec_command|exec|local_shell)$", "match": "(^|[\\s;&|\"'(])agy(\\.exe|\\.cmd)?\\s" },
+    { "label": "claude-print", "tool": "^(bash|powershell|shell|exec_command|exec|local_shell)$", "match": "\\bclaude\\s+(-p|--print)\\b" },
+    { "label": "gemini-cli", "tool": "^(bash|powershell|shell|exec_command|exec|local_shell)$", "match": "\\bgemini\\s+(-p|--prompt)\\b" }
+  ]
+}

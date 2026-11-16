@@ -1,0 +1,17 @@
+{
+  "_about": "Example --config file. Keys set here replace the defaults (see `claude-code-usage-audit rules`); prependRules, appendRules and extraMarkers add to them. run-worker.ps1 and my-agent-setup are placeholders: put in the script you hand work to other agents with, and the folder where you maintain your agent setup.",
+  "prependRules": [
+    {
+      "category": "dispatch",
+      "note": "my own launcher script (it lives under ~/.claude/skills, so without this rule running it would count as orchestration)",
+      "tool": "^(bash|powershell|shell|exec_command|exec|local_shell)$",
+      "match": "run-worker\\.ps1"
+    }
+  ],
+  "extraMarkers": [
+    { "label": "my-worker", "tool": "^(bash|powershell|shell|exec_command|exec|local_shell)$", "match": "run-worker\\.ps1" }
+  ],
+  "sessionRules": [
+    { "cwd": "/my-agent-setup$", "category": "orchestration" }
+  ]
+}

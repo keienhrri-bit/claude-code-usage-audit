@@ -1,0 +1,4 @@
+node_modules/
+.work/
+*.local.json
+out*.json

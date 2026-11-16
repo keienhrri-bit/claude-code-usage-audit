@@ -1,0 +1,2 @@
+{"time":"2026-01-05T09:20:00","seconds":480,"name":"j1","agent":"codex","dir":"/home/demo/webapp/jobs/j1","ok":false}
+{"time":"2026-01-05T12:20:00","seconds":840,"name":"j1-retry","agent":"codex","dir":"/home/demo/webapp/jobs/j1","ok":true}
