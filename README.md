@@ -274,6 +274,11 @@ What the differences show:
 - The log formats are undocumented and can change between versions.
 - CI runs the tests on Windows and Linux with Node 20, 22 and 24. Not tested on macOS.
 
+## Related
+
+- [agent-cite-check](https://github.com/keienhrri-bit/agent-cite-check): checks an AI agent's report against your local files without calling a model: quoted lines, declared numbers and changed files.
+- [claude-subagent-cost](https://github.com/keienhrri-bit/claude-subagent-cost): a Claude Code mod that shows each subagent's model and tokens under its Agent row, keeps the 5-hour and 7-day quota in view, and asks Claude for a handoff brief before the quota runs out.
+
 ## License
 
 MIT

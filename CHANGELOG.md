@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- README: a Related section linking agent-cite-check and claude-subagent-cost.
+
 ## 0.1.0 - 2026-11-16
 
 First release.

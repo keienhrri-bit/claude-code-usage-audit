@@ -274,6 +274,11 @@ node bin/claude-code-usage-audit.js compare --arm a=session:aaaa1111 --arm b=ses
 - 日志格式没有公开文档，版本之间可能变化。
 - CI 在 Windows 和 Linux 上用 Node 20、22、24 跑测试。没有在 macOS 上测试过。
 
+## 相关工具
+
+- [agent-cite-check](https://github.com/keienhrri-bit/agent-cite-check)：不调用模型，把 AI 代理回报里的引文、数字和改动过的文件逐条对回本地文件。
+- [claude-subagent-cost](https://github.com/keienhrri-bit/claude-subagent-cost)：一个 Claude Code mod，在每个子代理的 Agent 行下显示它用的模型和 token，常驻显示 5 小时和 7 天额度，额度快用完时让 Claude 写交接说明。
+
 ## 许可证
 
 MIT
