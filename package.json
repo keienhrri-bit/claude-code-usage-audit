@@ -1,6 +1,6 @@
 {
   "name": "claude-code-usage-audit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Where did my Claude Code usage go? Splits the main agent's usage from local Claude Code and Codex logs into setup work, dispatching and real work; lists subagents and cache rewrites separately.",
   "type": "module",
   "bin": {
