@@ -33,7 +33,7 @@ agy                  1        0           $0.00        not linked
 
 Part of the output for the synthetic logs in `examples/` (full output under [Example](#example)). Subagents, the cost of each hand-off and prompt-cache rewrites are listed separately from the main agent.
 
-Version 0.1.1. Not published on npm. All numbers are token counts from local logs, plus API-equivalent dollar estimates at list prices. They are not your bill and not the percentage `/usage` shows.
+Version 0.1.2. Not published on npm. All numbers are token counts from local logs, plus API-equivalent dollar estimates at list prices. They are not your bill and not the percentage `/usage` shows.
 
 ## Why
 
@@ -78,7 +78,7 @@ Claude Code deletes session data older than [`cleanupPeriodDays`](https://code.c
 `npm run demo` prints:
 
 ```text
-claude-code-usage-audit 0.1.1
+claude-code-usage-audit 0.1.2
 Local token ledger from session logs. USD is an API-equivalent estimate at list prices, not a subscription bill and not the /usage percentage.
 Window: start .. now (UTC)
 ! No price for model "gpt-demo" (26,500 raw tokens in the window): counted in raw tokens, left out of USD and weighted totals. Add it with --prices.

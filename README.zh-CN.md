@@ -33,7 +33,7 @@ agy                  1        0           $0.00        not linked
 
 上面是对 `examples/` 里合成日志的部分输出（完整输出见[示例](#示例)）。子代理（subagent）、每次派活的花费和提示缓存（prompt cache）重写都和主代理分开列。
 
-版本 0.1.1，没有发布到 npm。所有数字都是本地日志里的 token 数，加上按标价折算的 API 等价美元估算。它们不是你的账单，也不是 `/usage` 显示的百分比。
+版本 0.1.2，没有发布到 npm。所有数字都是本地日志里的 token 数，加上按标价折算的 API 等价美元估算。它们不是你的账单，也不是 `/usage` 显示的百分比。
 
 ## 为什么做这个
 
@@ -78,7 +78,7 @@ Claude Code 会删除超过 [`cleanupPeriodDays`](https://code.claude.com/docs/e
 `npm run demo` 的完整输出：
 
 ```text
-claude-code-usage-audit 0.1.1
+claude-code-usage-audit 0.1.2
 Local token ledger from session logs. USD is an API-equivalent estimate at list prices, not a subscription bill and not the /usage percentage.
 Window: start .. now (UTC)
 ! No price for model "gpt-demo" (26,500 raw tokens in the window): counted in raw tokens, left out of USD and weighted totals. Add it with --prices.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 - 2026-11-17
 
 Two follow-ups to 0.1.1, with regression tests in `test/review-fixes.test.js`.
 
