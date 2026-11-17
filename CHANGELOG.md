@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Two follow-ups to 0.1.1, with regression tests in `test/review-fixes.test.js`.
+
+- `tasks`: 0.1.1 took any quoted string with spaces that started with a path as one path, so a quoted command or prompt such as `bash -c "/w/tools/run.sh /w/jobs/j1"` became a single key and the job directory was lost. A quoted string now counts as one path only when no second path or flag follows a space, the file name has no space, and a `/`-rooted string has no space in its first folder.
+- Claude Code reader: a resumed session copies the whole history and starts at the same moment as the original, so 0.1.1's "file that started earliest" rule fell back to path order. When the starts tie, the copy from the file that ended first (the original) is kept; path order decides only when both tie.
+
 ## 0.1.1 - 2026-11-17
 
 Fixes from a code review. Each has a regression test in `test/review-fixes.test.js`.

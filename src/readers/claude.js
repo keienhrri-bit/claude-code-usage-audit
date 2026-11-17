@@ -4,8 +4,10 @@
 // One API response is written as several JSONL lines (one per content block) that share
 // message.id and repeat the same usage. Resumed or forked sessions copy earlier messages into a
 // new file. So we dedupe by message.id: within a file always, across files by default. Copies
-// share the timestamp; the copy from the file that started earliest (the original session) is
-// kept, and tool calls from all copies are merged.
+// share the timestamp. We keep the copy from the original session: the file that started first,
+// or, since a resumed session copies the whole history and starts at the same moment, the one
+// that ended first. Only when both tie does path order decide. Tool calls from all copies are
+// merged.
 //
 // Subagent turns can also appear in the main log, marked isSidechain: true. Those
 // become a session of their own, `<session>/<agentId or "sidechain">`, linked to the parent.
@@ -98,15 +100,21 @@ export async function readClaude(root, opts = {}) {
 
     stats.perFileUnique += fileTurns.size;
     let fileStart = Infinity;
-    for (const t of fileTurns.values()) fileStart = Math.min(fileStart, t.ts);
+    let fileEnd = -Infinity;
+    for (const t of fileTurns.values()) {
+      fileStart = Math.min(fileStart, t.ts);
+      fileEnd = Math.max(fileEnd, t.ts);
+    }
     for (const t of fileTurns.values()) {
       delete t._toolIds;
-      t._fileStart = fileStart;
+      t._fileSpan = [fileStart, fileEnd];
       if (dedupe === 'global') {
         const prev = byId.get(t.id);
         if (prev) {
           stats.crossFileDuplicates++;
-          const earlier = t.ts < prev.ts || (t.ts === prev.ts && t._fileStart < prev._fileStart);
+          const [s, e] = t._fileSpan;
+          const [ps, pe] = prev._fileSpan;
+          const earlier = t.ts < prev.ts || (t.ts === prev.ts && (s < ps || (s === ps && e < pe)));
           const tools = earlier ? mergeTools(t.tools, prev.tools) : mergeTools(prev.tools, t.tools);
           if (earlier) Object.assign(prev, t);
           prev.tools = tools;
@@ -117,7 +125,7 @@ export async function readClaude(root, opts = {}) {
       turns.push(t);
     }
   }
-  for (const t of turns) delete t._fileStart;
+  for (const t of turns) delete t._fileSpan;
   stats.uniqueTurns = turns.length;
   return { turns, stats };
 }

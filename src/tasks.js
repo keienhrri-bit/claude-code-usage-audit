@@ -29,10 +29,18 @@ const LAUNCHER_RE = /\.(ps1|mjs|cjs|js|py|sh|exe|cmd|bat)$/;
 const TASK_FILE_RE = /(brief|task|prompt|report|result|receipt|handoff)/;
 const TOOL_DIR_RE = /^(bin|scripts|skills|programs|tools|node_modules|\.claude|\.codex|scratchpad)$/;
 
-// A quoted string with spaces is one path ("c:/shared work/jobs/a") when it starts at a root and
-// no segment reads like a sentence; otherwise it is prose (a prompt) and its words are scanned.
+// A quoted string with spaces is one path ("c:/shared work/jobs/a") only when it looks like
+// nothing else: it starts at a root, no second path or flag follows a space, the file name has no
+// space, a "/"-rooted string has no space in its first folder ("/review src/a.ts" is a slash
+// command) and no folder has more than three spaces. Anything else is a command or a prompt and
+// its words are scanned as before.
+const ROOT_RE = /^(?:[a-z]:\/|~\/|\.{1,2}\/|\/)/;
 function isQuotedPath(q) {
-  return /^(?:[a-z]:|~|\.{1,2})?\//.test(q) && !/[\n"'<>|]/.test(q) && q.split('/').every((seg) => (seg.match(/ /g) || []).length <= 3);
+  if (!ROOT_RE.test(q) || /[\n"'<>|]/.test(q) || /\s(?:[a-z]:\/|~\/|\.{1,2}\/|\/|-)/.test(q)) return false;
+  const segs = q.split('/').filter(Boolean);
+  if (/\s/.test(segs[segs.length - 1] || '')) return false;
+  if (q.startsWith('/') && /\s/.test(segs[0] || '')) return false;
+  return segs.every((seg) => (seg.match(/ /g) || []).length <= 3);
 }
 
 // Candidate keys of one launch: paths and --name/--out style values. Launcher scripts (and the

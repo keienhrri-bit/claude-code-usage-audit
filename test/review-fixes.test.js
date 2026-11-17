@@ -63,6 +63,12 @@ test('quoted paths with spaces stay whole', () => {
   const keys = (text, cwd) => [...extractKeys(normalizeText(text), cwd)].sort();
   assert.deepEqual(keys('codex exec --out "C:\\Shared Work\\jobs\\alpha"', 'C:\\repo'), ['c:/shared work/jobs/alpha']);
   assert.deepEqual(keys('codex exec "fix /w/src/a.ts, report to /w/jobs/j1/report.md"', null), ['/w/jobs/j1/report.md', '/w/src/a.ts']);
+  assert.deepEqual(keys('codex exec --out "/home/u/my jobs/beta"', null), ['/home/u/my jobs/beta']);
+  // Quoted commands and prompts that start with a path are scanned word by word, as before.
+  assert.deepEqual(keys('codex exec "/w/jobs/j1/brief.md do this"', null), ['/w/jobs/j1/brief.md']);
+  assert.deepEqual(keys('bash -c "/w/tools/run.sh /w/jobs/j1"', null), ['/w/jobs/j1']);
+  assert.deepEqual(keys('claude -p "/review src/auth.ts"', null), ['src/auth.ts']);
+  assert.deepEqual(keys('pwsh -c "C:\\w\\run.ps1 -taskfile C:\\w\\jobs\\j2\\brief.md"', null), ['c:/w/jobs/j2/brief.md']);
   const { tasks } = run([
     turn({ ts: at(0), cwd: 'C:\\repo', tools: [call('Bash', 'codex exec --out "C:\\Shared Work\\jobs\\alpha"')] }),
     turn({ ts: at(5), cwd: 'C:\\repo', tools: [call('Bash', 'codex exec --out "C:\\Shared Work\\jobs\\beta"')] }),
@@ -106,6 +112,20 @@ test('cross-file copies: the earliest-started file wins regardless of file names
     assert.equal(mx.length, 1);
     assert.equal(mx[0].sessionId, 'orig', `${origName} / ${forkName}`);
     assert.deepEqual(mx[0].tools.map((c) => c.id), ['toolu_x']);
+  }
+});
+
+test('cross-file copies: a resumed session starts at the same moment; the file that ended first wins', async () => {
+  for (const [origName, resName] of [['z-orig', 'a-resumed'], ['a-orig', 'z-resumed']]) {
+    const root = tmpDir();
+    const history = (sid) => [
+      asst({ sid, id: 'h1', ts: '2026-01-05T09:00:00Z', u: usage(1, 1) }),
+      asst({ sid, id: 'h2', ts: '2026-01-05T09:05:00Z', u: usage(1, 2) }),
+    ];
+    writeLines(path.join(root, 'p', `${origName}.jsonl`), history('orig'));
+    writeLines(path.join(root, 'p', `${resName}.jsonl`), [...history('resumed'), asst({ sid: 'resumed', id: 'r1', ts: '2026-01-06T10:00:00Z', u: usage(1, 1) })]);
+    const { turns } = await readClaude(root);
+    assert.deepEqual(turns.map((t) => [t.id, t.sessionId]).sort(), [['h1', 'orig'], ['h2', 'orig'], ['r1', 'resumed']], `${origName} / ${resName}`);
   }
 });
 
