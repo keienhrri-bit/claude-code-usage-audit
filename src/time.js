@@ -63,30 +63,48 @@ export function fmt(zone, ms) {
   return `${w.y}-${pad(w.mo)}-${pad(w.d)} ${pad(w.h)}:${pad(w.mi)}`;
 }
 
+// Date.UTC rolls 2026-02-30 over to March 2; reject such dates and times instead.
+function checkParts(s, y, mo, d, h = 0, mi = 0, se = 0) {
+  const asUtc = Date.UTC(y, mo - 1, d, h, mi, se);
+  const v = new Date(asUtc);
+  if (v.getUTCFullYear() !== y || v.getUTCMonth() !== mo - 1 || v.getUTCDate() !== d || h > 23 || mi > 59 || se > 59) {
+    throw new Error(`Bad time: ${s} (no such date or time)`);
+  }
+  return asUtc;
+}
+
 // Parse a time string. Strings with an explicit offset or "Z" are absolute;
 // naive strings ("2026-01-05", "2026-01-05T10:00") are wall-clock time in the zone.
 export function parseTime(zone, str) {
   if (str == null || str === '') return null;
   const s = String(str).trim();
   if (/([zZ]|[+-]\d{2}:?\d{2})$/.test(s) && /\d{4}-\d{2}-\d{2}T/.test(s)) {
+    const p = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+    if (p) checkParts(s, +p[1], +p[2], +p[3], +p[4], +p[5], +(p[6] || 0));
     const v = Date.parse(s);
     if (Number.isNaN(v)) throw new Error(`Bad time: ${s}`);
     return v;
   }
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
   if (!m) throw new Error(`Bad time: ${s} (use YYYY-MM-DD or YYYY-MM-DDTHH:MM)`);
-  const asUtc = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+  const asUtc = checkParts(s, +m[1], +m[2], +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
   // Two passes handle DST edges well enough for reporting.
   let guess = asUtc - zone.offsetMinutes(asUtc) * 60000;
   guess = asUtc - zone.offsetMinutes(guess) * 60000;
   return guess;
 }
 
-// "--until 2026-01-06" means through the end of that day.
+// "--until 2026-01-06" means through the end of that day: up to the next local midnight, which
+// is 23 or 25 hours away on a daylight-saving change.
 export function parseUntil(zone, str) {
   if (str == null || str === '') return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(String(str).trim())) {
-    return parseTime(zone, str) + 24 * 3600 * 1000 - 1;
+  const s = String(str).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) {
+    parseTime(zone, s); // validates the date
+    const next = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + 1));
+    const nextDay = `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`;
+    return parseTime(zone, nextDay) - 1;
   }
-  return parseTime(zone, str);
+  return parseTime(zone, s);
 }

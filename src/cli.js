@@ -45,7 +45,7 @@ Output:
   --json <file|->        write the full result as JSON
   --top <n>              rows in top lists (default 10)
   --no-days              skip the per-day table
-  --redact               hash working directories and hide ledger names (for sharing)
+  --redact               hash working directories, hide ledger names and file paths (for sharing)
   -h, --help, -v, --version
 `;
 
@@ -102,16 +102,9 @@ export async function main(argv) {
   if (!['report', 'cache', 'tasks', 'compare'].includes(cmd)) throw new Error(`Unknown command "${cmd}". Try --help.`);
 
   const zone = makeZone(a.tz || 'local');
-  let config = a.config || null;
-  if (a.cwdRule.length) {
-    // Write a merged temp config so --cwd-rule composes with --config.
-    const base = config ? JSON.parse(fs.readFileSync(config, 'utf8').replace(/^﻿/, '')) : {};
-    base.sessionRules = [...(base.sessionRules || []), ...a.cwdRule.map(parseCwdRule)];
-    const tmp = path.join(os.tmpdir(), `ccua-rules-${process.pid}.json`);
-    fs.writeFileSync(tmp, JSON.stringify(base));
-    process.on('exit', () => { try { fs.unlinkSync(tmp); } catch { /* already gone */ } });
-    config = tmp;
-  }
+  const config = a.config || null;
+  // --cwd-rule entries are added after the config file's sessionRules, in memory.
+  const extraSessionRules = a.cwdRule.map(parseCwdRule);
   const claudeDir = a.noClaude ? null : a.claudeDir || defaultClaudeDir();
   const codexDir = a.noCodex ? null : a.codexDir || defaultCodexDir();
   for (const [name, d, explicit] of [['--claude-dir', claudeDir, a.claudeDir], ['--codex-dir', codexDir, a.codexDir]]) {
@@ -125,6 +118,7 @@ export async function main(argv) {
     sinceMs: a.since ? parseTime(zone, a.since) : null,
     untilMs: a.until ? parseUntil(zone, a.until) : null,
     config,
+    extraSessionRules,
     prices: a.prices || null,
     ledger: a.ledger || null,
     ledgerFields: a.ledgerTimeIs ? { timeIs: a.ledgerTimeIs } : {},
@@ -141,7 +135,6 @@ export async function main(argv) {
 
   const result = await analyze(opts);
   const top = a.top ? Number(a.top) : 10;
-  if (config && config !== a.config) fs.rmSync(config, { force: true });
   if (a.cwdRule.length) result.opts.config = a.config ? `${a.config} + --cwd-rule` : '--cwd-rule';
   const summary = buildSummary(result, VERSION, { top });
 

@@ -185,7 +185,7 @@ export function buildSummary(a, version, { top = 10 } = {}) {
       dedupe: o.dedupe,
       mergeSubagents: !!o.mergeSubagents,
       rules: o.config ? (o.redact ? 'custom' : o.config) : 'default',
-      prices: a.prices.source,
+      prices: o.redact && a.prices.overridesFile ? `${a.prices.baseSource} + overrides from a local file` : a.prices.source,
     },
     warnings: a.warnings,
     parsing,
@@ -225,16 +225,19 @@ function summarizeTasks(a, red, top, mainTotal) {
   const byLabel = {};
   let attributedUsd = 0;
   const rows = [];
+  const inWin = a.inWin || (() => true);
   for (const task of a.tasks) {
+    // Only turns inside the report window, so the shares are of the same main-agent total.
     const main = emptyBucket();
     const phases = {};
     for (const { turn, phase, share } of task.turns) {
+      if (!inWin(turn.ts)) continue;
       add(main, turn, share);
       phases[phase] ??= emptyBucket();
       add(phases[phase], turn, share);
     }
     const worker = emptyBucket();
-    for (const t of task.workerTurns) add(worker, t);
+    for (const t of task.workerTurns) if (inWin(t.ts)) add(worker, t);
     attributedUsd += main.usd;
     const L = (byLabel[task.label] ??= { tasks: 0, retries: 0, mainUsd: 0, mainRaw: 0, workerUsd: 0, workerRaw: 0, ledgerOk: 0, ledgerFailed: 0 });
     L.tasks++;
@@ -266,12 +269,14 @@ function summarizeTasks(a, red, top, mainTotal) {
     for (const k of ['mainRaw', 'workerRaw']) L[k] = Math.round(L[k]);
   }
   const usdList = rows.map((r) => r.mainUsd || 0).sort((x, y) => x - y);
+  const mid = usdList.length >> 1;
+  const median = !usdList.length ? null : usdList.length % 2 ? usdList[mid] : (usdList[mid - 1] + usdList[mid]) / 2;
   return {
     count: rows.length,
     ledger: a.ledgerInfo.entries ? a.ledgerInfo : null,
     attributedMainUsd: round(attributedUsd),
     attributedShareOfMainUsd: mainTotal.usd ? round(attributedUsd / mainTotal.usd) : null,
-    medianMainUsdPerTask: usdList.length ? round(usdList[Math.floor((usdList.length - 1) / 2)]) : null,
+    medianMainUsdPerTask: round(median),
     byLabel,
     top: [...rows].sort((x, y) => (y.mainUsd || 0) - (x.mainUsd || 0)).slice(0, top),
     all: rows,

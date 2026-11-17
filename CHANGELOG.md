@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+Fixes from a code review. Each has a regression test in `test/review-fixes.test.js`.
+
+- `--redact` now also hides the path of a `--prices` file (it was printed in `options.prices`).
+- `--cwd-rule` no longer writes a temporary rules file; the rules are merged in memory.
+- `tasks`: with `--since` / `--until`, a task's cost counts only its turns inside the window, so the share of main-agent cost can no longer exceed 100%. Tasks launched before the window are listed when one of their turns falls inside it.
+- `tasks`: relaunching the same job more than three times keeps the retries. A key is dropped as generic only when it appears next to more than three different sets of other keys.
+- `tasks`: a quoted path with spaces (`"C:\Shared Work\jobs\a"`) is one key, not two fragments that make unrelated jobs look like retries.
+- `tasks`: a `--cwd-rule` / `sessionRules` category is no longer changed to `dispatch` by task attribution.
+- Claude Code reader: subagent turns written into the main log (`isSidechain: true`) form their own session linked to the parent, so they no longer start tasks or count as the main agent's previous turn in cache and category detection.
+- Claude Code reader: copies of a message in several files share a timestamp; the copy from the file that started earliest is kept (it was path order), and tool calls from all copies are merged.
+- Claude Code reader: assistant lines with whitespace after the colons (`"type": "assistant"`) are read.
+- `compare`: a `session:<id>@A..B` arm counts that session's subagents even when the main agent has no turn in the window.
+- `--until <date>` ends at the next local midnight, which is 23 or 25 hours away on a daylight-saving change.
+- Impossible dates and times (`2026-02-30`, `25:00`) are rejected instead of rolling over.
+- The median cost per task is the mean of the two middle values for an even number of tasks.
+- README: worker cost is linked only for Claude Code subagents; Codex and agy work shows as "not linked" even when their logs are loaded.
 - README: a Related section linking agent-cite-check and claude-subagent-cost.
 
 ## 0.1.0 - 2026-11-16

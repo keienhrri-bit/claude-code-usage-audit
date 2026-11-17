@@ -8,8 +8,9 @@ export function defaultRulesText() {
 }
 
 // A user config replaces any top-level key it sets. `prependRules` / `appendRules` /
-// `extraMarkers` extend the defaults instead of replacing them.
-export function loadRules(file) {
+// `extraMarkers` extend the defaults instead of replacing them. `extraSessionRules` (from
+// --cwd-rule) come after the file's sessionRules.
+export function loadRules(file, extraSessionRules = []) {
   const base = JSON.parse(defaultRulesText());
   let cfg = base;
   if (file) {
@@ -19,6 +20,7 @@ export function loadRules(file) {
     if (user.appendRules) cfg.rules = [...cfg.rules, ...user.appendRules];
     if (user.extraMarkers) cfg.markers = [...cfg.markers, ...user.extraMarkers];
   }
+  if (extraSessionRules.length) cfg = { ...cfg, sessionRules: [...(cfg.sessionRules || []), ...extraSessionRules] };
   return compile(cfg);
 }
 

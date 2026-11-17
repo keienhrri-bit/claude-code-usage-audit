@@ -6,13 +6,14 @@ const BUILTIN = new URL('../data/prices.json', import.meta.url);
 export function loadPrices(extraFile) {
   const base = JSON.parse(fs.readFileSync(fileURLToPath(BUILTIN), 'utf8'));
   const models = { ...base.models };
-  let source = base._source;
+  const baseSource = base._source;
+  let source = baseSource;
   if (extraFile) {
     const extra = JSON.parse(fs.readFileSync(extraFile, 'utf8').replace(/^﻿/, ''));
     Object.assign(models, extra.models || extra);
     source += ` + overrides from ${extraFile}`;
   }
-  return { models, source, lookup: makeLookup(models) };
+  return { models, source, baseSource, overridesFile: extraFile || null, lookup: makeLookup(models) };
 }
 
 // Exact id, then id without a trailing date (-20260101), then longest known prefix.

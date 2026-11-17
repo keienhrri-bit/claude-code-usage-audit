@@ -22,11 +22,18 @@ import fs from 'node:fs';
 export const DEFAULT_TASK_OPTS = { lookbackMinutes: 30, maxKeyShare: 3, ledgerSlackSeconds: 120 };
 
 const PATH_RE = /[^\s"'`<>|;,(){}[\]=]*\/[^\s"'`<>|;,(){}[\]=]+/g;
-const ARG_RE = /(?:^|\s)--?(?:name|job|jobname|task|out|outdir|output|dir|workdir|brief|file|taskfile|promptfile|prompt-file)[=\s]+["']?([^\s"']+)/gi;
+const QUOTED_RE = /"([^"\n]+)"|'([^'\n]+)'/g;
+const ARG_RE = /(?:^|\s)--?(?:name|job|jobname|task|out|outdir|output|dir|workdir|brief|file|taskfile|promptfile|prompt-file)[=\s]+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s"']+))/gi;
 
 const LAUNCHER_RE = /\.(ps1|mjs|cjs|js|py|sh|exe|cmd|bat)$/;
 const TASK_FILE_RE = /(brief|task|prompt|report|result|receipt|handoff)/;
 const TOOL_DIR_RE = /^(bin|scripts|skills|programs|tools|node_modules|\.claude|\.codex|scratchpad)$/;
+
+// A quoted string with spaces is one path ("c:/shared work/jobs/a") when it starts at a root and
+// no segment reads like a sentence; otherwise it is prose (a prompt) and its words are scanned.
+function isQuotedPath(q) {
+  return /^(?:[a-z]:|~|\.{1,2})?\//.test(q) && !/[\n"'<>|]/.test(q) && q.split('/').every((seg) => (seg.match(/ /g) || []).length <= 3);
+}
 
 // Candidate keys of one launch: paths and --name/--out style values. Launcher scripts (and the
 // directories that hold them), the working directory and its parents are not keys.
@@ -34,8 +41,16 @@ export function extractKeys(text, cwd) {
   const keys = new Set();
   const launchers = [];
   const cwdN = cwd ? normalizeText(cwd).replace(/\/+$/, '') : null;
-  for (const m of text.matchAll(PATH_RE)) {
-    const k = m[0].replace(/[.:,]+$/, '').replace(/^\.\//, '').replace(/\/+$/, '');
+  const found = [];
+  const rest = text.replace(QUOTED_RE, (all, a, b) => {
+    const q = (a ?? b).trim();
+    if (!/\s/.test(q) || !isQuotedPath(q)) return all;
+    found.push(q);
+    return ' ';
+  });
+  for (const m of rest.matchAll(PATH_RE)) found.push(m[0]);
+  for (const p of found) {
+    const k = p.replace(/[.:,]+$/, '').replace(/^\.\//, '').replace(/\/+$/, '');
     if (/^[a-z]+:\/\//.test(k)) continue;
     const segs = k.split('/').filter(Boolean);
     const last = segs[segs.length - 1] || '';
@@ -48,7 +63,9 @@ export function extractKeys(text, cwd) {
     keys.add(k);
   }
   for (const m of text.matchAll(ARG_RE)) {
-    const v = m[1].replace(/[.:,]+$/, '').replace(/\/+$/, '');
+    let v = m[1] ?? m[2] ?? m[3];
+    if (m[3] == null && !isQuotedPath(v.trim())) v = v.trim().split(/\s/)[0]; // quoted prose: first word, as before
+    v = v.trim().replace(/[.:,]+$/, '').replace(/\/+$/, '');
     const isLauncher = LAUNCHER_RE.test(v) && !TASK_FILE_RE.test(v.split('/').pop());
     if (v.length >= 6 && /[._/\-0-9]/.test(v) && !isLauncher) keys.add(v);
   }
@@ -122,8 +139,8 @@ export function attributeTasks(sessions, rules, opts = {}) {
   }
 
   for (const [sid, list] of sessions) {
-    if (!list.length || list[0].kind !== 'main') continue;
     for (const t of list) {
+      if (t.kind !== 'main') continue;
       for (const call of t.tools) {
         const label = markerFor(rules, call, t);
         if (!label) continue;
@@ -176,11 +193,19 @@ export function attributeTasks(sessions, rules, opts = {}) {
 
   // Keep only keys that are specific to a task. In session order: a key already owned by an
   // earlier task marks a retry of that task; otherwise the key is dropped if the session mentioned
-  // it before the lookback window (an ambient path such as the session scratch dir), or if more
-  // than `maxKeyShare` tasks across all sessions name it (a generic file name).
+  // it before the lookback window (an ambient path such as the session scratch dir), or if it
+  // appears next to more than `maxKeyShare` different sets of other keys (a generic file name
+  // shared by unrelated jobs). Relaunching the same job, however often, counts once.
   const lookback = lookbackMinutes * 60000;
-  const keyCount = new Map();
-  for (const task of tasks) for (const k of task.keys) keyCount.set(k, (keyCount.get(k) || 0) + 1);
+  const related = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+  const companions = new Map();
+  for (const task of tasks) {
+    for (const k of task.keys) {
+      const others = [...task.keys].filter((o) => !related(o, k)).sort().join('\n');
+      if (!companions.has(k)) companions.set(k, new Set());
+      companions.get(k).add(others);
+    }
+  }
   for (const [sid, sessTasks] of bySession) {
     const list = sessions.get(sid);
     const owner = new Map();
@@ -191,7 +216,7 @@ export function attributeTasks(sessions, rules, opts = {}) {
           continue;
         }
         const early = list.some((t) => t.ts < task.ts - lookback && t !== task.launchTurn && mentions(t, k));
-        if (early || keyCount.get(k) > maxKeyShare) {
+        if (early || companions.get(k).size > maxKeyShare) {
           task.keys.delete(k);
           continue;
         }
@@ -207,6 +232,7 @@ export function attributeTasks(sessions, rules, opts = {}) {
     let prevLinks = [];
     let prevTs = null;
     for (const t of list) {
+      if (t.kind !== 'main') continue;
       const linked = new Map();
       for (const task of sessTasks) if (task.launchTurn === t) linked.set(task, 'launch');
       if (t.tools.length) {
@@ -239,7 +265,8 @@ export function attributeTasks(sessions, rules, opts = {}) {
   if (rules.attributionAsDispatch) {
     for (const list of sessions.values()) {
       for (const t of list) {
-        if (t.taskLinks && t.taskLinks.length && t.category === rules.defaultCategory) {
+        // A --cwd-rule / sessionRules category is final.
+        if (t.taskLinks && t.taskLinks.length && t.category === rules.defaultCategory && t.categoryReason !== 'session') {
           t.category = 'dispatch';
           t.categoryReason = 'attributed';
         }

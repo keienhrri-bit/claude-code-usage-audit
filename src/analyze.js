@@ -10,7 +10,7 @@ import { dayKey } from './time.js';
 export async function analyze(o) {
   const warnings = [];
   const prices = loadPrices(o.prices);
-  const rules = loadRules(o.config);
+  const rules = loadRules(o.config, o.extraSessionRules || []);
   const readerSince = o.sinceMs != null ? o.sinceMs - 2 * 86400000 : null; // keep context before the window
 
   let turns = [];
@@ -69,7 +69,9 @@ export async function analyze(o) {
     allTurns: turns,
     sessions,
     turns: windowTurns,
-    tasks: taskResult.tasks.filter((k) => inWin(k.ts)),
+    // Tasks with a launch or an attributed turn in the window; reports count only in-window turns.
+    tasks: taskResult.tasks.filter((k) => inWin(k.ts) || k.turns.some((x) => inWin(x.turn.ts))),
+    inWin,
     tasksAll: taskResult.tasks,
     rewritesAll: rewrites,
     ledgerInfo: { entries: taskResult.ledgerEntries, matched: taskResult.ledgerMatched },

@@ -43,11 +43,12 @@ export function compareArms(a, arms) {
     const inWin = (ts) => (arm.from == null || ts >= arm.from) && (arm.to == null || ts <= arm.to);
     const sessOk = (t) => !arm.session || String(t.sessionId).toLowerCase().startsWith(arm.session);
     const mains = all.filter((t) => t.kind === 'main' && sessOk(t) && inWin(t.ts));
-    const mainSessions = new Set(mains.map((t) => t.sessionId));
     for (const t of mains) add(r.main, t);
+    // A subagent belongs to the arm by its parent session, also while the main agent is silent.
+    const parentOk = (t) => !arm.session || String(t.parentSessionId || '').toLowerCase().startsWith(arm.session);
     for (const t of all) {
       if (t.kind !== 'subagent' || !inWin(t.ts)) continue;
-      if (arm.session ? mainSessions.has(t.parentSessionId) : true) add(r.subagent, t);
+      if (parentOk(t)) add(r.subagent, t);
     }
     const mainSet = new Set(mains);
     r.tasks += a.tasksAll.filter((k) => mainSet.has(k.launchTurn)).length;

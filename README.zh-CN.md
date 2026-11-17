@@ -24,7 +24,7 @@ compaction                1     22k   $0.17
 model-switch              1     25k  $0.098
 
 == Hand-offs (tasks) ==
-4 tasks; main agent spent $0.53 on them (40% of main), median $0.074 per task
+4 tasks; main agent spent $0.53 on them (40% of main), median $0.13 per task
 marker           tasks  retries  main API-equiv  worker API-equiv
 codex-exec           2        1           $0.25        not linked
 claude-subagent      1        0           $0.28            $0.004
@@ -69,7 +69,7 @@ npm run demo
 
 - **Claude Code**：`~/.claude/projects/**/*.jsonl`（或 `$CLAUDE_CONFIG_DIR/projects`），包括 `<session>/subagents/` 里的子代理记录。Claude Code 会把一次 API 响应写成几行、每行重复同样的用量，恢复（resume）或分叉（fork）的会话还会把旧消息复制进新文件。所以每个 `message.id` 在所有文件里只算一次。`--dedupe file` 会把不同文件里的副本分别计数，和按文件去重的工具一致。
 - **Codex**：`~/.codex/sessions/**/rollout-*.jsonl`（或 `$CODEX_HOME/sessions`）。每轮用量取 `token_count` 事件之间 `total_token_usage` 的增量。
-- 别的都不读。工具不联网。它只写你用 `--json` 指定的文件；用 `--cwd-rule` 时会写一个临时规则文件，退出时删除。
+- 别的都不读。工具不联网。它只写你用 `--json` 指定的文件。
 
 Claude Code 会删除超过 [`cleanupPeriodDays`](https://code.claude.com/docs/en/claude-directory#cleaned-up-automatically)（默认 30 天）的会话数据。想统计更长的时间段，要在日志被删之前调大这个设置。
 
@@ -123,7 +123,7 @@ model-switch              1     25k  $0.098
 Not counted above: 3 cold starts (first turn of a session or subagent), 72k tokens written
 
 == Hand-offs (tasks) ==
-4 tasks; main agent spent $0.53 on them (40% of main), median $0.074 per task
+4 tasks; main agent spent $0.53 on them (40% of main), median $0.13 per task
 Ledger: 2 of 2 entries matched to a launch
 marker           tasks  retries  main API-equiv  worker API-equiv
 codex-exec           2        1           $0.25        not linked
@@ -189,7 +189,9 @@ node bin/claude-code-usage-audit.js --config my-rules.json
 - **launch**（发起）：发起它的那一轮；
 - **review**（复核）：之后工具输入提到某个键的轮次（读回报、核对、返工）。
 
-键和更早任务重合的任务显示为返工（retry）。Claude Code 子代理的花费会关联到任务上；其他 CLI 做的活显示为“not linked”，除非也载入了它们自己的日志。
+键和更早任务重合的任务显示为返工（retry）。只有 Claude Code 子代理的花费会关联到任务上。通过其他 CLI（Codex、agy 等）发起的活显示为“not linked”，即使载入了它们的日志也一样；它们的用量仍会出现在按来源的合计里。
+
+用了 `--since` / `--until` 时，任务的花费只算落在时间窗口内的轮次。窗口开始前发起的任务，只要有一轮落在窗口内（比如在窗口内读回报），也会列出来。
 
 **可选的任务台账。** 如果你的派活脚本每完成一单写一行记录，用 `--ledger` 传进来。每行是 JSON，含 `name` 和/或 `dir`，以及 `start` 和 `end`，或者 `time` 和 `seconds`。`ok: false` 表示这一单失败。台账条目会和时间窗口内、调用里提到它的名字或目录的那次发起配对：
 
@@ -224,7 +226,7 @@ node bin/claude-code-usage-audit.js compare --arm a=session:aaaa1111 --arm b=ses
 
 - `data/prices.json` 存的是每百万 token 的美元标价，取自 2026-11-16 的 [Anthropic 价格页](https://platform.claude.com/docs/en/about-claude/pricing)，5 分钟和 1 小时缓存写入分别按输入价的 1.25 倍和 2 倍。`--prices <file>` 可以增加或覆盖模型价格，比如 Codex 的模型默认没有价格，只按原始 token 计。
 - “加权 token”（weighted tokens）是按该模型自己的价格折成的输入 token 当量，便于比较不同模型上的轮次。
-- `--redact` 把工作目录换成短哈希、隐藏台账名字，用于要公开贴出的输出。贴之前仍要自己检查一遍。
+- `--redact` 把工作目录换成短哈希，隐藏台账名字和 `--config`、`--prices` 文件的路径，用于要公开贴出的输出。贴之前仍要自己检查一遍。
 
 ## 和其他工具的关系
 

@@ -3,10 +3,18 @@
 //
 // One API response is written as several JSONL lines (one per content block) that share
 // message.id and repeat the same usage. Resumed or forked sessions copy earlier messages into a
-// new file. So we dedupe by message.id: within a file always, across files by default.
+// new file. So we dedupe by message.id: within a file always, across files by default. Copies
+// share the timestamp; the copy from the file that started earliest (the original session) is
+// kept, and tool calls from all copies are merged.
+//
+// Subagent turns can also appear in the main log, marked isSidechain: true. Those
+// become a session of their own, `<session>/<agentId or "sidechain">`, linked to the parent.
 
 import path from 'node:path';
 import { walk, eachLine, mtimeMs, readJsonMaybe, toolText, normalizeText } from './fsutil.js';
+
+// Cheap pre-filter before JSON.parse; allows whitespace around the colon.
+const ASSISTANT_RE = /"type"\s*:\s*"assistant"/;
 
 export async function readClaude(root, opts = {}) {
   const { sinceMs = null, dedupe = 'global' } = opts;
@@ -31,7 +39,7 @@ export async function readClaude(root, opts = {}) {
     let sessionId = isSubFile ? parts[subIdx - 1] : path.basename(file, '.jsonl');
 
     await eachLine(file, (line) => {
-      const isAssistant = line.includes('"type":"assistant"');
+      const isAssistant = ASSISTANT_RE.test(line);
       const isCompact = !isAssistant && line.includes('"compact_boundary"');
       if (!isAssistant && !isCompact) return;
       let o;
@@ -57,12 +65,13 @@ export async function readClaude(root, opts = {}) {
         if (Number.isNaN(ts)) return;
         if (!isSubFile && o.sessionId) sessionId = o.sessionId;
         const sidechain = !isSubFile && o.isSidechain === true;
+        const sub = isSubFile ? o.agentId || path.basename(file, '.jsonl') : sidechain ? o.agentId || 'sidechain' : null;
         t = {
           source: 'claude',
           id,
           file,
-          sessionId: isSubFile ? `${sessionId}/${o.agentId || path.basename(file, '.jsonl')}` : sessionId,
-          parentSessionId: isSubFile ? sessionId : null,
+          sessionId: sub ? `${sessionId}/${sub}` : sessionId,
+          parentSessionId: sub ? sessionId : null,
           kind: isSubFile || sidechain ? 'subagent' : 'main',
           agentType: isSubFile ? meta?.agentType || 'subagent' : sidechain ? 'sidechain' : null,
           parentToolUseId: isSubFile ? meta?.toolUseId || null : null,
@@ -88,15 +97,19 @@ export async function readClaude(root, opts = {}) {
     });
 
     stats.perFileUnique += fileTurns.size;
+    let fileStart = Infinity;
+    for (const t of fileTurns.values()) fileStart = Math.min(fileStart, t.ts);
     for (const t of fileTurns.values()) {
       delete t._toolIds;
+      t._fileStart = fileStart;
       if (dedupe === 'global') {
         const prev = byId.get(t.id);
         if (prev) {
           stats.crossFileDuplicates++;
-          if (t.ts < prev.ts) {
-            Object.assign(prev, t); // keep the earliest copy
-          }
+          const earlier = t.ts < prev.ts || (t.ts === prev.ts && t._fileStart < prev._fileStart);
+          const tools = earlier ? mergeTools(t.tools, prev.tools) : mergeTools(prev.tools, t.tools);
+          if (earlier) Object.assign(prev, t);
+          prev.tools = tools;
           continue;
         }
         byId.set(t.id, t);
@@ -104,8 +117,14 @@ export async function readClaude(root, opts = {}) {
       turns.push(t);
     }
   }
+  for (const t of turns) delete t._fileStart;
   stats.uniqueTurns = turns.length;
   return { turns, stats };
+}
+
+function mergeTools(a, b) {
+  const ids = new Set(a.map((c) => c.id));
+  return [...a, ...b.filter((c) => !ids.has(c.id))];
 }
 
 function setUsage(t, u) {

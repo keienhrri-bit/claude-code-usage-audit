@@ -24,7 +24,7 @@ compaction                1     22k   $0.17
 model-switch              1     25k  $0.098
 
 == Hand-offs (tasks) ==
-4 tasks; main agent spent $0.53 on them (40% of main), median $0.074 per task
+4 tasks; main agent spent $0.53 on them (40% of main), median $0.13 per task
 marker           tasks  retries  main API-equiv  worker API-equiv
 codex-exec           2        1           $0.25        not linked
 claude-subagent      1        0           $0.28            $0.004
@@ -69,7 +69,7 @@ npm run demo
 
 - **Claude Code**: `~/.claude/projects/**/*.jsonl` (or `$CLAUDE_CONFIG_DIR/projects`), including subagent transcripts in `<session>/subagents/`. Claude Code writes one API response as several lines that repeat the same usage, and resumed or forked sessions copy earlier messages into new files. Responses are therefore counted once per `message.id` across all files. `--dedupe file` counts copies in different files separately, as tools that dedupe per file do.
 - **Codex**: `~/.codex/sessions/**/rollout-*.jsonl` (or `$CODEX_HOME/sessions`). Per-turn usage is the growth of `total_token_usage` between `token_count` events.
-- Nothing else. The tool makes no network connections. It writes only the `--json` file you ask for, plus a temporary rules file when `--cwd-rule` is used, which is deleted on exit.
+- Nothing else. The tool makes no network connections. It writes only the `--json` file you ask for.
 
 Claude Code deletes session data older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/claude-directory#cleaned-up-automatically) (30 days by default). To audit a longer period, raise that setting before the logs you want are gone.
 
@@ -123,7 +123,7 @@ model-switch              1     25k  $0.098
 Not counted above: 3 cold starts (first turn of a session or subagent), 72k tokens written
 
 == Hand-offs (tasks) ==
-4 tasks; main agent spent $0.53 on them (40% of main), median $0.074 per task
+4 tasks; main agent spent $0.53 on them (40% of main), median $0.13 per task
 Ledger: 2 of 2 entries matched to a launch
 marker           tasks  retries  main API-equiv  worker API-equiv
 codex-exec           2        1           $0.25        not linked
@@ -189,7 +189,9 @@ A tool call that matches a marker (Agent/Task, `codex exec`, `agy`, `claude -p`,
 - **launch**: the turn that launches it;
 - **review**: later turns whose tool input mentions a key (reading the report, checking, redoing).
 
-A task whose keys match an earlier task is shown as a retry. Worker cost is linked for Claude Code subagents; work done by other CLIs shows as "not linked" unless its own logs are loaded.
+A task whose keys match an earlier task is shown as a retry. Worker cost is linked only for Claude Code subagents. Work launched through other CLIs (Codex, agy, ...) shows as "not linked", even when their logs are loaded; their usage still appears in the totals by source.
+
+With `--since` / `--until`, a task's cost counts only its turns inside the window. A task launched before the window shows up when one of its turns falls inside it, for example when its report is read.
 
 **Optional job ledger.** If your launcher writes a line per finished job, pass it with `--ledger`. Each line is JSON with `name` and/or `dir`, and either `start` and `end`, or `time` and `seconds`. `ok: false` marks a failed job. An entry is paired with the launch inside its time window whose call mentions its name or directory:
 
@@ -224,7 +226,7 @@ Each arm is a time window or a session id prefix. The table shows main-agent usa
 
 - `data/prices.json` holds list prices in USD per million tokens, taken from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing) as of 2026-11-16, with 5-minute and 1-hour cache writes at 1.25× and 2× input. `--prices <file>` adds or overrides models, for example Codex models, which have no price by default and are counted in raw tokens only.
 - "Weighted tokens" are input-token equivalents at the model's own prices, so turns on different models can be compared.
-- `--redact` replaces working directories with short hashes and hides ledger names, for output you want to post. Check the result before posting it anyway.
+- `--redact` replaces working directories with short hashes and hides ledger names and the paths of `--config` and `--prices` files, for output you want to post. Check the result before posting it anyway.
 
 ## How it relates to other tools
 
