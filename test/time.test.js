@@ -44,6 +44,35 @@ test('a bare --until date runs to the end of that day', () => {
   assert.equal(parseUntil(cst, '2026-01-05T10:00'), Date.UTC(2026, 0, 5, 2, 0));
 });
 
+test('four-digit years below 0100 retain their actual year', () => {
+  const instant = Date.parse('0001-01-01T00:00:00Z');
+  assert.equal(parseTime(makeZone('UTC'), '0001-01-01T00:00Z'), instant);
+  assert.equal(parseTime(makeZone('Etc/UTC'), '0001-01-01'), instant);
+});
+
+test('--until handles next-day boundaries outside its four-digit input format', () => {
+  const utc = makeZone('UTC');
+  assert.equal(parseUntil(utc, '0100-01-01'), Date.parse('0100-01-02T00:00:00Z') - 1);
+  assert.equal(parseUntil(utc, '9999-12-31'), Date.parse('+010000-01-01T00:00:00Z') - 1);
+});
+
+test('explicit offset times accept 24:00 only with zero minutes, seconds and fraction', () => {
+  const utc = makeZone('UTC');
+  assert.equal(parseTime(utc, '2026-01-05T24:00:00.000Z'), Date.UTC(2026, 0, 6));
+  assert.equal(parseTime(utc, '2026-01-05T24:00+05:30'), Date.UTC(2026, 0, 5, 18, 30));
+  for (const bad of ['24:01Z', '24:00:01Z', '24:00:00.001Z', '24:00:00.0001Z', '25:00Z']) {
+    assert.throws(() => parseTime(utc, '2026-01-05T' + bad), /Bad time/);
+  }
+  assert.throws(() => parseTime(utc, '2026-02-30T24:00Z'), /Bad time/);
+});
+
+test('extended ISO years with explicit offsets reject impossible calendar dates', () => {
+  const utc = makeZone('UTC');
+  assert.throws(() => parseTime(utc, '+002026-02-30T00:00Z'), /Bad time/);
+  assert.throws(() => parseTime(utc, '-000001-02-29T00:00-0500'), /Bad time/);
+  assert.equal(parseTime(utc, '+002024-02-29T00:00+0000'), Date.UTC(2024, 1, 29));
+});
+
 test('day keys and formatting use the zone', () => {
   const late = Date.UTC(2026, 0, 5, 17, 30);
   assert.equal(dayKey(makeZone('UTC'), late), '2026-01-05');

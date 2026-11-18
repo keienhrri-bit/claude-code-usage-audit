@@ -16,9 +16,9 @@ dispatch           9        259k        60%      $0.53    40%
 work               4        113k        26%      $0.79    58%
 
 == Cache rewrites ==
-4 rewrites, 114k tokens written; $0.79 more than reading them from cache (58% of all API-equiv)
+5 rewrites, 135k tokens written; $0.95 more than reading them from cache (70% of all API-equiv)
 cause                events  tokens  excess
-idle-1h                   1     34k   $0.27
+idle-1h                   2     55k   $0.43
 waiting-on-subagent       1     33k   $0.26
 compaction                1     22k   $0.17
 model-switch              1     25k  $0.098
@@ -33,7 +33,7 @@ agy                  1        0           $0.00        not linked
 
 Part of the output for the synthetic logs in `examples/` (full output under [Example](#example)). Subagents, the cost of each hand-off and prompt-cache rewrites are listed separately from the main agent.
 
-Version 0.1.2. Not published on npm. All numbers are token counts from local logs, plus API-equivalent dollar estimates at list prices. They are not your bill and not the percentage `/usage` shows.
+Version 0.1.3. Not published on npm. All numbers are token counts from local logs, plus API-equivalent dollar estimates at list prices. They are not your bill and not the percentage `/usage` shows.
 
 ## Why
 
@@ -67,7 +67,7 @@ npm run demo
 
 ## What it reads
 
-- **Claude Code**: `~/.claude/projects/**/*.jsonl` (or `$CLAUDE_CONFIG_DIR/projects`), including subagent transcripts in `<session>/subagents/`. Claude Code writes one API response as several lines that repeat the same usage, and resumed or forked sessions copy earlier messages into new files. Responses are therefore counted once per `message.id` across all files. `--dedupe file` counts copies in different files separately, as tools that dedupe per file do.
+- **Claude Code**: `~/.claude/projects/**/*.jsonl` (or `$CLAUDE_CONFIG_DIR/projects`), including subagent transcripts in `<session>/subagents/`. Claude Code writes one API response as several lines that repeat the same usage, and resumed or forked sessions copy earlier messages into new files. Responses are therefore counted once per `message.id` across all files. Copied responses still provide history for category and cache analysis in the sessions that contain them. `--dedupe file` counts copies in different files separately, as tools that dedupe per file do.
 - **Codex**: `~/.codex/sessions/**/rollout-*.jsonl` (or `$CODEX_HOME/sessions`). Per-turn usage is the growth of `total_token_usage` between `token_count` events.
 - Nothing else. The tool makes no network connections. It writes only the `--json` file you ask for.
 
@@ -78,7 +78,7 @@ Claude Code deletes session data older than [`cleanupPeriodDays`](https://code.c
 `npm run demo` prints:
 
 ```text
-claude-code-usage-audit 0.1.2
+claude-code-usage-audit 0.1.3
 Local token ledger from session logs. USD is an API-equivalent estimate at list prices, not a subscription bill and not the /usage percentage.
 Window: start .. now (UTC)
 ! No price for model "gpt-demo" (26,500 raw tokens in the window): counted in raw tokens, left out of USD and weighted totals. Add it with --prices.
@@ -114,13 +114,13 @@ day          main  orchestration  dispatch   work  orchestration %  subagents
 2026-01-06  $0.17          $0.00     $0.00  $0.17             0.0%      $0.00
 
 == Cache rewrites ==
-4 rewrites, 114k tokens written; $0.79 more than reading them from cache (58% of all API-equiv)
+5 rewrites, 135k tokens written; $0.95 more than reading them from cache (70% of all API-equiv)
 cause                events  tokens  excess
-idle-1h                   1     34k   $0.27
+idle-1h                   2     55k   $0.43
 waiting-on-subagent       1     33k   $0.26
 compaction                1     22k   $0.17
 model-switch              1     25k  $0.098
-Not counted above: 3 cold starts (first turn of a session or subagent), 72k tokens written
+Not counted above: 2 cold starts (first turn of a session or subagent), 51k tokens written
 
 == Hand-offs (tasks) ==
 4 tasks; main agent spent $0.53 on them (40% of main), median $0.13 per task
@@ -189,7 +189,7 @@ A tool call that matches a marker (Agent/Task, `codex exec`, `agy`, `claude -p`,
 - **launch**: the turn that launches it;
 - **review**: later turns whose tool input mentions a key (reading the report, checking, redoing).
 
-A task whose keys match an earlier task is shown as a retry. Worker cost is linked only for Claude Code subagents. Work launched through other CLIs (Codex, agy, ...) shows as "not linked", even when their logs are loaded; their usage still appears in the totals by source.
+A task whose keys match an earlier task is shown as a retry. Claude Code subagents can have linked worker costs. Tasks launched through external CLIs show the main agent's own usage and a worker status of "not linked". Loaded Codex logs contribute to the totals by source. The supported log formats are Claude Code and Codex.
 
 With `--since` / `--until`, a task's cost counts only its turns inside the window. A task launched before the window shows up when one of its turns falls inside it, for example when its report is read.
 
@@ -220,7 +220,7 @@ node bin/claude-code-usage-audit.js compare --arm self=2026-01-05T09:00..2026-01
 node bin/claude-code-usage-audit.js compare --arm a=session:aaaa1111 --arm b=session:bbbb2222
 ```
 
-Each arm is a time window or a session id prefix. The table shows main-agent usage, subagents, tasks and cache rewrites per arm. A single pair is an anecdote; repeat each arm on several similar tasks before drawing a conclusion.
+Each arm is a time window or a session id prefix. The table shows main-agent usage, subagents, tasks launched in the arm and cache rewrites. The report also lists older tasks with a review or linked worker turn inside the report window. A single pair is an anecdote; repeat each arm on several similar tasks before drawing a conclusion.
 
 ### Prices and sharing
 

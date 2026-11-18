@@ -57,10 +57,12 @@ test('report: categories of the main agent', () => {
 
 test('report: cache rewrites by cause, cold starts apart', () => {
   const s = cliJson(EX_ARGS);
-  assert.equal(s.cache.events, 4);
+  assert.equal(s.cache.events, 5);
   assert.deepEqual(Object.keys(s.cache.byCause).sort(), ['compaction', 'idle-1h', 'model-switch', 'waiting-on-subagent']);
-  assert.equal(s.cache.rewriteTokens, 33000 + 34000 + 22000 + 25000);
-  assert.deepEqual([s.cache.coldStarts.events, s.cache.coldStarts.tokens], [3, 30000 + 21000 + 20500]);
+  // The resumed session inherits msg_a1 and rewrites 20,500 tokens after a long gap.
+  assert.equal(s.cache.byCause['idle-1h'].events, 2);
+  assert.equal(s.cache.rewriteTokens, 33000 + 34000 + 22000 + 25000 + 20500);
+  assert.deepEqual([s.cache.coldStarts.events, s.cache.coldStarts.tokens], [2, 30000 + 21000]);
   assert.ok(s.cache.top.every((e) => !['session-start', 'subagent-start'].includes(e.cause)));
 });
 
@@ -135,7 +137,7 @@ test('--json <file> writes the file and still prints the text report', () => {
 
 test('cache and tasks commands', () => {
   const c = cliJson(['cache', ...EX_ARGS]);
-  assert.equal(c.events, 4);
+  assert.equal(c.events, 5);
   const ct = cli(['cache', ...EX_ARGS]);
   assert.ok(ct.out.includes('waiting-on-subagent'));
   const t = cliJson(['tasks', ...EX_ARGS]);

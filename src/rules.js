@@ -79,7 +79,7 @@ export function markerFor(rules, call, turn) {
 // Sets turn.category for every turn. `sessions` is Map<sessionId, turns sorted by ts>.
 export function classifyAll(rules, sessions) {
   for (const list of sessions.values()) {
-    const cwd = list.find((t) => t.cwd)?.cwd || '';
+    const cwd = list.find((t) => !t.contextOnly && t.cwd)?.cwd || '';
     const forced = rules.sessionRules.find((r) => r.cwd && r.cwd.test(cwd.replace(/\\/g, '/')));
     let prev = rules.defaultCategory;
     for (const t of list) {

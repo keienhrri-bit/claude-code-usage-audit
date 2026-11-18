@@ -16,9 +16,9 @@ dispatch           9        259k        60%      $0.53    40%
 work               4        113k        26%      $0.79    58%
 
 == Cache rewrites ==
-4 rewrites, 114k tokens written; $0.79 more than reading them from cache (58% of all API-equiv)
+5 rewrites, 135k tokens written; $0.95 more than reading them from cache (70% of all API-equiv)
 cause                events  tokens  excess
-idle-1h                   1     34k   $0.27
+idle-1h                   2     55k   $0.43
 waiting-on-subagent       1     33k   $0.26
 compaction                1     22k   $0.17
 model-switch              1     25k  $0.098
@@ -33,7 +33,7 @@ agy                  1        0           $0.00        not linked
 
 上面是对 `examples/` 里合成日志的部分输出（完整输出见[示例](#示例)）。子代理（subagent）、每次派活的花费和提示缓存（prompt cache）重写都和主代理分开列。
 
-版本 0.1.2，没有发布到 npm。所有数字都是本地日志里的 token 数，加上按标价折算的 API 等价美元估算。它们不是你的账单，也不是 `/usage` 显示的百分比。
+版本 0.1.3，没有发布到 npm。所有数字都是本地日志里的 token 数，加上按标价折算的 API 等价美元估算。它们不是你的账单，也不是 `/usage` 显示的百分比。
 
 ## 为什么做这个
 
@@ -67,7 +67,7 @@ npm run demo
 
 ## 读什么
 
-- **Claude Code**：`~/.claude/projects/**/*.jsonl`（或 `$CLAUDE_CONFIG_DIR/projects`），包括 `<session>/subagents/` 里的子代理记录。Claude Code 会把一次 API 响应写成几行、每行重复同样的用量，恢复（resume）或分叉（fork）的会话还会把旧消息复制进新文件。所以每个 `message.id` 在所有文件里只算一次。`--dedupe file` 会把不同文件里的副本分别计数，和按文件去重的工具一致。
+- **Claude Code**：`~/.claude/projects/**/*.jsonl`（或 `$CLAUDE_CONFIG_DIR/projects`），包括 `<session>/subagents/` 里的子代理记录。Claude Code 会把一次 API 响应写成几行、每行重复同样的用量，恢复（resume）或分叉（fork）的会话还会把旧消息复制进新文件。所以每个 `message.id` 在所有文件里只算一次。副本仍会为所在会话提供分类和缓存分析所需的历史上下文。`--dedupe file` 会把不同文件里的副本分别计数，和按文件去重的工具一致。
 - **Codex**：`~/.codex/sessions/**/rollout-*.jsonl`（或 `$CODEX_HOME/sessions`）。每轮用量取 `token_count` 事件之间 `total_token_usage` 的增量。
 - 别的都不读。工具不联网。它只写你用 `--json` 指定的文件。
 
@@ -78,7 +78,7 @@ Claude Code 会删除超过 [`cleanupPeriodDays`](https://code.claude.com/docs/e
 `npm run demo` 的完整输出：
 
 ```text
-claude-code-usage-audit 0.1.2
+claude-code-usage-audit 0.1.3
 Local token ledger from session logs. USD is an API-equivalent estimate at list prices, not a subscription bill and not the /usage percentage.
 Window: start .. now (UTC)
 ! No price for model "gpt-demo" (26,500 raw tokens in the window): counted in raw tokens, left out of USD and weighted totals. Add it with --prices.
@@ -114,13 +114,13 @@ day          main  orchestration  dispatch   work  orchestration %  subagents
 2026-01-06  $0.17          $0.00     $0.00  $0.17             0.0%      $0.00
 
 == Cache rewrites ==
-4 rewrites, 114k tokens written; $0.79 more than reading them from cache (58% of all API-equiv)
+5 rewrites, 135k tokens written; $0.95 more than reading them from cache (70% of all API-equiv)
 cause                events  tokens  excess
-idle-1h                   1     34k   $0.27
+idle-1h                   2     55k   $0.43
 waiting-on-subagent       1     33k   $0.26
 compaction                1     22k   $0.17
 model-switch              1     25k  $0.098
-Not counted above: 3 cold starts (first turn of a session or subagent), 72k tokens written
+Not counted above: 2 cold starts (first turn of a session or subagent), 51k tokens written
 
 == Hand-offs (tasks) ==
 4 tasks; main agent spent $0.53 on them (40% of main), median $0.13 per task
@@ -189,7 +189,7 @@ node bin/claude-code-usage-audit.js --config my-rules.json
 - **launch**（发起）：发起它的那一轮；
 - **review**（复核）：之后工具输入提到某个键的轮次（读回报、核对、返工）。
 
-键和更早任务重合的任务显示为返工（retry）。只有 Claude Code 子代理的花费会关联到任务上。通过其他 CLI（Codex、agy 等）发起的活显示为“not linked”，即使载入了它们的日志也一样；它们的用量仍会出现在按来源的合计里。
+键和更早任务重合的任务显示为返工（retry）。Claude Code 子代理的花费可以关联到任务上。通过外部 CLI 发起的任务会显示主代理自己的用量，worker 一栏显示为“not linked”。载入的 Codex 日志会计入按来源的合计。目前支持读取 Claude Code 和 Codex 的日志。
 
 用了 `--since` / `--until` 时，任务的花费只算落在时间窗口内的轮次。窗口开始前发起的任务，只要有一轮落在窗口内（比如在窗口内读回报），也会列出来。
 
@@ -220,7 +220,7 @@ node bin/claude-code-usage-audit.js compare --arm self=2026-01-05T09:00..2026-01
 node bin/claude-code-usage-audit.js compare --arm a=session:aaaa1111 --arm b=session:bbbb2222
 ```
 
-每个 arm 是一个时间窗口或会话 ID 前缀。表里按 arm 列出主代理用量、子代理、任务和缓存重写。只比一对只是个例；每种做法在几件相似的任务上各重复几次，再下结论。
+每个 arm 是一个时间窗口或会话 ID 前缀。表里按 arm 列出主代理用量、子代理用量、该区间内发起的任务数和缓存重写。报告也会列出窗口内有复核轮次或已关联 worker 轮次的早期任务。只比一对只是个例；每种做法在几件相似的任务上各重复几次，再下结论。
 
 ### 价格和分享
 

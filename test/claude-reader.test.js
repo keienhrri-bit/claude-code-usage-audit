@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readClaude } from '../src/readers/claude.js';
-import { tmpDir, writeLines, writeJson, usage, asst, toolUse } from './helpers.js';
+import { cliJson, tmpDir, writeLines, writeJson, usage, asst, toolUse } from './helpers.js';
 
 // projects/p1/S1.jsonl          m1 (three lines), synthetic, broken line, compact, m2, m3, sidechain m6
 // projects/p1/S2.jsonl          copy of m1 (resumed session), m4 (no cache breakdown)
@@ -109,6 +109,66 @@ test('files last written before sinceMs are skipped', async () => {
   const { turns, stats } = await readClaude(root, { sinceMs: Date.UTC(2026, 0, 1) });
   assert.equal(stats.skippedOld, 1);
   assert.equal(turns.some((t) => t.id === 'm4'), false);
+});
+
+test('tied duplicate spans use stable session ownership when filenames change', async () => {
+  const kept = [];
+  for (const [a, z] of [['a-copy', 'z-copy'], ['z-copy', 'a-copy']]) {
+    const root = tmpDir();
+    for (const [sid, file] of [['session-a', a], ['session-z', z]]) {
+      writeLines(path.join(root, 'p', file + '.jsonl'), [
+        asst({ sid, id: 'shared', ts: '2026-01-05T09:00:00Z', u: usage(1, 1) }),
+      ]);
+    }
+    const { turns } = await readClaude(root);
+    assert.equal(turns.length, 1);
+    kept.push(turns[0].sessionId);
+  }
+  assert.deepEqual(kept, ['session-a', 'session-a']);
+});
+
+test('copied history uses the matching original transcript and supplies branch context', async () => {
+  const root = tmpDir();
+  const shared = asst({
+    sid: 'origin', id: 'shared', ts: '2026-01-05T09:00:00Z', u: usage(1, 1, { w1: 30000 }),
+    content: [toolUse('Agent', { description: 'Example task' }, 'toolu_shared')],
+  });
+  writeLines(path.join(root, 'p', 'origin.jsonl'), [
+    shared,
+    asst({ sid: 'origin', id: 'original-tail', ts: '2026-01-05T09:20:00Z', u: usage(1, 1) }),
+  ]);
+  writeLines(path.join(root, 'p', 'branch.jsonl'), [
+    shared,
+    asst({ sid: 'branch', id: 'branch-tail', ts: '2026-01-05T09:05:00Z', u: usage(1, 1, { w5: 25000 }) }),
+  ]);
+  const { turns } = await readClaude(root);
+  const report = cliJson(['--claude-dir', root, '--no-codex', '--tz', 'UTC']);
+  assert.deepEqual({
+    ownerFile: path.basename(turns.find((t) => t.id === 'shared').file),
+    billedTurns: report.totals.mainAgent.turns,
+    dispatchTurns: report.categories.dispatch.turns,
+    tasks: report.tasks.count,
+    coldStarts: report.cache.coldStarts.events,
+    rewrites: report.cache.top.map((event) => [event.session, event.cause]),
+  }, {
+    ownerFile: 'origin.jsonl', billedTurns: 3, dispatchTurns: 3, tasks: 1, coldStarts: 1,
+    rewrites: [['branch', 'unexplained']],
+  });
+});
+
+test('cross-file copies merge incomplete usage without doubling cache writes', async () => {
+  const root = tmpDir();
+  const ts = '2026-01-05T09:05:00Z';
+  writeLines(path.join(root, 'p', 'origin.jsonl'), [
+    asst({ sid: 'origin', id: 'first', ts: '2026-01-05T09:00:00Z', u: usage(1, 1) }),
+    asst({ sid: 'origin', id: 'shared', ts, u: usage(10, 10, { w5: 30000, cr: 20, breakdown: false }) }),
+  ]);
+  writeLines(path.join(root, 'p', 'branch.jsonl'), [
+    asst({ sid: 'branch', id: 'shared', ts, u: usage(2, 50, { w1: 30000, cr: 10 }) }),
+  ]);
+  const { turns } = await readClaude(root);
+  const copies = turns.filter((t) => t.id === 'shared');
+  assert.deepEqual(copies.map((t) => [t.input, t.output, t.cacheRead, t.cacheWrite5m, t.cacheWrite1h]), [[10, 50, 20, 0, 30000]]);
 });
 
 test('a missing directory reads as empty', async () => {

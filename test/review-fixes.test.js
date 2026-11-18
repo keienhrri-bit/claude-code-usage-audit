@@ -1,4 +1,4 @@
-// Regression tests for the issues fixed in 0.1.1. Each test reproduces one reported problem.
+// Regression tests for findings from the two code reviews.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,7 +9,7 @@ import { extractKeys, attributeTasks } from '../src/tasks.js';
 import { loadRules, classifyAll } from '../src/rules.js';
 import { makeZone, parseTime, parseUntil } from '../src/time.js';
 import { normalizeText } from '../src/readers/fsutil.js';
-import { cli, cliJson, EX_ARGS, tmpDir, writeLines, writeJson, usage, asst, toolUse, turn, call, at } from './helpers.js';
+import { cli, cliJson, EX_ARGS, ROOT, tmpDir, writeLines, writeJson, usage, asst, toolUse, turn, call, at } from './helpers.js';
 
 const close = (a, b, eps = 1e-4) => assert.ok(Math.abs(a - b) < eps, `${a} != ${b}`);
 const R = loadRules();
@@ -18,6 +18,124 @@ function run(list) {
   classifyAll(R, sessions);
   return { ...attributeTasks(sessions, R), sessions };
 }
+
+test('quoted shell commands retain relative path arguments', () => {
+  const keys = (command) => [...extractKeys(normalizeText(command), null)].sort();
+  assert.deepEqual(keys('bash -c "/w/tools/run.sh src/jobs/j1"'), ['src/jobs/j1']);
+  assert.deepEqual(keys("bash -lc '/w/tools/run.sh src/jobs/j2'"), ['src/jobs/j2']);
+});
+
+test('four sibling job directories are independent despite sharing a parent argument', () => {
+  const parent = '/w/jobs/common';
+  const siblings = ['j1', 'j2', 'j3', 'j4'].map((name) => parent + '/' + name);
+  const { tasks } = run(siblings.map((dir, index) => turn({
+    ts: at(index * 10),
+    tools: [call('Bash', 'codex exec --dir ' + parent + ' --out ' + dir)],
+  })));
+  assert.deepEqual(tasks.map((t) => t.retryOf), [null, null, null, null]);
+  assert.deepEqual(tasks.map((t) => [...t.keys]), siblings.map((dir) => [dir]));
+});
+
+test('deduped sidechain usage keeps the worker link in either file order', () => {
+  const results = [];
+  for (const mainFile of ['a-main.jsonl', 'z-main.jsonl']) {
+    const root = tmpDir();
+    const worker = asst({
+      sid: 'S1',
+      id: 'worker-message',
+      ts: '2026-01-05T09:01:00Z',
+      u: usage(1000, 100),
+      extra: { isSidechain: true, agentId: 'worker' },
+    });
+    writeLines(path.join(root, 'p', mainFile), [
+      asst({
+        sid: 'S1',
+        id: 'launch',
+        ts: '2026-01-05T09:00:00Z',
+        u: usage(1, 1),
+        content: [toolUse('Agent', { description: 'Example task' }, 'toolu_launch')],
+      }),
+      worker,
+    ]);
+    const subDir = path.join(root, 'p', 'S1', 'subagents');
+    writeLines(path.join(subDir, 'agent-worker.jsonl'), [worker]);
+    writeJson(path.join(subDir, 'agent-worker.meta.json'), { agentType: 'reviewer', toolUseId: 'toolu_launch' });
+    const report = cliJson(['--claude-dir', root, '--no-codex', '--tz', 'UTC']);
+    const [task] = report.tasks.all;
+    results.push([report.parsing.claude.crossFileDuplicates, report.totals.bySource.claude.subagent.turns, task.workerRaw, task.workerUsd]);
+  }
+  assert.deepEqual(results, [[1, 1, 1100, 0.006], [1, 1, 1100, 0.006]]);
+});
+
+test('--until a date keeps the last hour when the next midnight is skipped', () => {
+  const zone = makeZone('America/Sao_Paulo');
+  assert.equal(parseUntil(zone, '2018-11-03'), Date.parse('2018-11-04T02:59:59.999Z'));
+});
+
+test('a worker-only window lists the task with only its in-window worker usage', () => {
+  const s = cliJson([...EX_ARGS, '--since', '2026-01-05T09:26', '--until', '2026-01-05T09:30']);
+  assert.equal(s.tasks.count, 1);
+  const [task] = s.tasks.all;
+  assert.equal(task.label, 'claude-subagent');
+  assert.equal(task.mainUsd, 0);
+  assert.equal(task.workerRaw, 21503 + 23403);
+  assert.equal(task.workerUsd, s.totals.bySource.claude.subagent.apiEquivalentUsd);
+});
+
+test('explicit quoted path arguments keep spaces in their last segment', () => {
+  const launch = (name, m) => turn({
+    ts: at(m),
+    cwd: 'C:\\repo',
+    tools: [call('Bash', 'codex exec --out "C:\\jobs\\' + name + '"')],
+  });
+  const { tasks } = run([launch('alpha one', 0), launch('alpha two', 5)]);
+  assert.deepEqual(tasks.map((t) => [...t.keys]), [['c:/jobs/alpha one'], ['c:/jobs/alpha two']]);
+  assert.deepEqual(tasks.map((t) => t.retryOf), [null, null]);
+  assert.deepEqual([...extractKeys('codex exec -c "c:/jobs/alpha one"', null)], ['c:/jobs/alpha one']);
+  assert.deepEqual([...extractKeys("codex exec --out='src/jobs/alpha two'", null)], ['src/jobs/alpha two']);
+  const nested = 'bash -c \'/w/tools/run.sh --out "src/jobs/alpha two"\'';
+  assert.deepEqual([...extractKeys(nested, null)], ['src/jobs/alpha two']);
+});
+
+test('repeat launches in one job directory can change external output files', () => {
+  const job = '/w/jobs/job001';
+  const outputs = ['run1', 'run2', 'run3', 'run4'].map((name) => '/w/results/' + name + '/result.json');
+  const { tasks } = run(outputs.map((out, i) => turn({
+    ts: at(i * 5),
+    tools: [call('Bash', 'codex exec -C ' + job + ' --out ' + out)],
+  })));
+  assert.deepEqual(tasks.map((t) => t.retryOf), [null, 'T1', 'T1', 'T1']);
+  assert.ok(tasks.every((t, i) => t.keys.has(job) && t.keys.has(outputs[i])));
+});
+
+test('compare labels the launch count separately from tasks reviewed in the report window', () => {
+  const from = '2026-01-05T10:40';
+  const to = '2026-01-05T10:41';
+  const s = cliJson([...EX_ARGS, '--since', from, '--until', to]);
+  assert.equal(s.tasks.count, 1);
+  assert.deepEqual(Object.keys(s.tasks.all[0].phaseUsd), ['review']);
+  const args = ['compare', ...EX_ARGS, '--arm', 'review=' + from + '..' + to, '--arm', 'baseline=session:bbbb2222'];
+  assert.equal(cliJson(args).arms[0].tasksLaunched, 0);
+  assert.match(cli(args).out.split(/\r?\n/)[0], /\btasks launched\b/i);
+});
+
+test('worker usage documentation limits source totals to loaded Codex logs', () => {
+  const en = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8').split('\n').find((line) => line.startsWith('A task whose keys'));
+  const zh = fs.readFileSync(path.join(ROOT, 'README.zh-CN.md'), 'utf8').split('\n').find((line) => line.startsWith('键和更早任务'));
+  assert.match(en, /Loaded Codex logs[^\n.]*totals by source/);
+  assert.match(zh, /载入的 Codex 日志[^\n。]*按来源的合计/);
+  const r = cliJson(['compare', ...EX_ARGS, '--arm', 'a=session:aaaa1111', '--arm', 'b=session:bbbb2222']);
+  assert.doesNotMatch(r.note, /\bagy\b/i);
+});
+
+test('the 0.1.1 changelog scopes regression coverage to behavior fixes', () => {
+  const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const release = changelog.match(/^## 0\.1\.1 [^\n]*\n+([^]*?)(?=^## )/m)[1];
+  const [summary] = release.split(/\r?\n/);
+  assert.doesNotMatch(summary, /\bEach has a regression test\b/);
+  assert.match(summary, /[Bb]ehavior fixes have regression tests/);
+  assert.match(release, /^Documentation updates:/m);
+});
 
 test('task cost counts only turns inside the report window', () => {
   // The subagent task is launched at 09:25; its report is read at 10:40, after --until.
@@ -136,11 +254,24 @@ test('--until a date ends at the next local midnight across DST changes', () => 
   assert.equal(parseUntil(ny, '2026-11-01') - parseTime(ny, '2026-11-01'), 25 * 3600000 - 1);
 });
 
-test('the median of an even number of tasks is the mean of the middle two', () => {
-  const s = cliJson(EX_ARGS);
-  const v = s.tasks.all.map((r) => r.mainUsd).sort((x, y) => x - y);
-  assert.equal(v.length, 4);
-  close(s.tasks.medianMainUsdPerTask, (v[1] + v[2]) / 2);
+test('the median rounds only after averaging unrounded task costs', () => {
+  const root = tmpDir();
+  const prices = writeJson(path.join(root, 'prices.json'), { models: { 'test-model': { input: 1, output: 1 } } });
+  writeLines(path.join(root, 'p', 'S1.jsonl'), [100, 151].map((input, i) => asst({
+    id: 'launch-' + i,
+    ts: new Date(at(i)).toISOString(),
+    model: 'test-model',
+    u: usage(input, 0),
+    content: [toolUse('Agent', { description: 'Example task' })],
+  })));
+  const args = ['--claude-dir', root, '--no-codex', '--tz', 'UTC', '--prices', prices];
+  const s = cliJson(args);
+  assert.deepEqual(s.tasks.all.map((task) => task.mainUsd), [0.0001, 0.0002]);
+  // The unrounded median is (100 + 151) / 2 millionths, which rounds to 0.0001 at four places.
+  assert.equal(s.tasks.medianMainUsdPerTask, 0.0001);
+  const empty = cliJson([...args, '--until', '2026-01-05T08:59:59Z']);
+  assert.equal(empty.tasks.count, 0);
+  assert.equal(empty.tasks.medianMainUsdPerTask, null);
 });
 
 test('impossible dates and times are rejected', () => {

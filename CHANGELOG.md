@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3 - 2026-11-18
+
+- Task keys preserve quoted path arguments and pick up relative paths inside shell commands. Retry detection distinguishes sibling job directories and accepts changed external output files for repeat launches.
+- Reports include tasks with linked worker usage inside the window and compute median task costs before rounding. The comparison table labels its count of launches.
+- Claude Code deduplication preserves worker links from matching records, combines usage and tools into one billable response, and keeps copied history for category and cache analysis.
+- Date-only boundaries handle skipped midnights and year rollovers. Explicit-offset times validate extended years and accept ISO end-of-day `24:00`.
+- Clarified which log formats contribute to source totals and corrected the 0.1.1 regression coverage statement.
+
 ## 0.1.2 - 2026-11-17
 
 Two follow-ups to 0.1.1, with regression tests in `test/review-fixes.test.js`.
@@ -9,7 +17,7 @@ Two follow-ups to 0.1.1, with regression tests in `test/review-fixes.test.js`.
 
 ## 0.1.1 - 2026-11-17
 
-Fixes from a code review. Each has a regression test in `test/review-fixes.test.js`.
+Behavior fixes have regression tests in `test/review-fixes.test.js`.
 
 - `--redact` now also hides the path of a `--prices` file (it was printed in `options.prices`).
 - `--cwd-rule` no longer writes a temporary rules file; the rules are merged in memory.
@@ -24,8 +32,10 @@ Fixes from a code review. Each has a regression test in `test/review-fixes.test.
 - `--until <date>` ends at the next local midnight, which is 23 or 25 hours away on a daylight-saving change.
 - Impossible dates and times (`2026-02-30`, `25:00`) are rejected instead of rolling over.
 - The median cost per task is the mean of the two middle values for an even number of tasks.
-- README: worker cost is linked only for Claude Code subagents; Codex and agy work shows as "not linked" even when their logs are loaded.
-- README: a Related section linking agent-cite-check and claude-subagent-cost.
+Documentation updates:
+
+- Clarified that Claude Code subagents are the supported workers for task cost links.
+- Added a Related section linking agent-cite-check and claude-subagent-cost.
 
 ## 0.1.0 - 2026-11-16
 

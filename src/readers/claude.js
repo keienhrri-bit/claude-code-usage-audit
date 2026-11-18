@@ -4,10 +4,9 @@
 // One API response is written as several JSONL lines (one per content block) that share
 // message.id and repeat the same usage. Resumed or forked sessions copy earlier messages into a
 // new file. So we dedupe by message.id: within a file always, across files by default. Copies
-// share the timestamp. We keep the copy from the original session: the file that started first,
-// or, since a resumed session copies the whole history and starts at the same moment, the one
-// that ended first. Only when both tie does path order decide. Tool calls from all copies are
-// merged.
+// usually share the timestamp. The copy in its recorded session's transcript has priority;
+// otherwise transcript times and then session IDs decide. We merge usage and tools into one
+// billable turn and retain copies from other sessions as context.
 //
 // Subagent turns can also appear in the main log, marked isSidechain: true. Those
 // become a session of their own, `<session>/<agentId or "sidechain">`, linked to the parent.
@@ -23,7 +22,9 @@ export async function readClaude(root, opts = {}) {
   const files = walk(root, (name) => name.endsWith('.jsonl'));
   const stats = { files: 0, skippedOld: 0, assistantLines: 0, perFileUnique: 0, crossFileDuplicates: 0 };
   const byId = new Map();
+  const duplicates = new Map();
   const turns = [];
+  const contextTurns = [];
 
   for (const file of files) {
     if (sinceMs != null && mtimeMs(file) < sinceMs) {
@@ -38,7 +39,9 @@ export async function readClaude(root, opts = {}) {
     if (isSubFile) meta = readJsonMaybe(file.replace(/\.jsonl$/, '.meta.json'));
     const fileTurns = new Map();
     let compactPending = false;
-    let sessionId = isSubFile ? parts[subIdx - 1] : path.basename(file, '.jsonl');
+    const fileSessionId = isSubFile ? parts[subIdx - 1] : path.basename(file, '.jsonl');
+    let sessionId = fileSessionId;
+    let mainSessionId = fileSessionId;
 
     await eachLine(file, (line) => {
       const isAssistant = ASSISTANT_RE.test(line);
@@ -65,8 +68,11 @@ export async function readClaude(root, opts = {}) {
       if (!t) {
         const ts = Date.parse(o.timestamp);
         if (Number.isNaN(ts)) return;
-        if (!isSubFile && o.sessionId) sessionId = o.sessionId;
         const sidechain = !isSubFile && o.isSidechain === true;
+        if (!isSubFile && o.sessionId) {
+          sessionId = o.sessionId;
+          if (!sidechain) mainSessionId = o.sessionId;
+        }
         const sub = isSubFile ? o.agentId || path.basename(file, '.jsonl') : sidechain ? o.agentId || 'sidechain' : null;
         t = {
           source: 'claude',
@@ -107,27 +113,103 @@ export async function readClaude(root, opts = {}) {
     }
     for (const t of fileTurns.values()) {
       delete t._toolIds;
-      t._fileSpan = [fileStart, fileEnd];
-      if (dedupe === 'global') {
-        const prev = byId.get(t.id);
-        if (prev) {
-          stats.crossFileDuplicates++;
-          const [s, e] = t._fileSpan;
-          const [ps, pe] = prev._fileSpan;
-          const earlier = t.ts < prev.ts || (t.ts === prev.ts && (s < ps || (s === ps && e < pe)));
-          const tools = earlier ? mergeTools(t.tools, prev.tools) : mergeTools(prev.tools, t.tools);
-          if (earlier) Object.assign(prev, t);
-          prev.tools = tools;
-          continue;
-        }
-        byId.set(t.id, t);
+      if (dedupe !== 'global') {
+        turns.push(t);
+        continue;
       }
-      turns.push(t);
+      t._fileSpan = [fileStart, fileEnd];
+      t._ownTranscript = t.kind === 'main' && t.sessionId === fileSessionId;
+      t._contextSessionId = t.kind === 'main' ? mainSessionId : t.sessionId;
+      const prev = byId.get(t.id);
+      if (!prev) {
+        byId.set(t.id, t);
+        continue;
+      }
+      stats.crossFileDuplicates++;
+      if (!duplicates.has(t.id)) duplicates.set(t.id, [prev]);
+      duplicates.get(t.id).push(t);
+      if (preferredCopy(t, prev)) byId.set(t.id, t);
     }
   }
-  for (const t of turns) delete t._fileSpan;
+  for (const [id, turn] of byId) {
+    const copies = duplicates.get(id);
+    if (copies) mergeCopies(turn, copies, contextTurns);
+    turns.push(turn);
+  }
+  for (const t of [...turns, ...contextTurns]) {
+    delete t._fileSpan;
+    delete t._ownTranscript;
+    delete t._contextSessionId;
+    delete t._cacheBreakdown;
+  }
   stats.uniqueTurns = turns.length;
-  return { turns, stats };
+  return { turns, stats, contextTurns };
+}
+
+function preferredCopy(a, b) {
+  if (a.ts !== b.ts) return a.ts < b.ts;
+  // Some forked transcripts retain the source session ID on copied messages.
+  if (a._ownTranscript !== b._ownTranscript) return a._ownTranscript;
+  const [aStart, aEnd] = a._fileSpan;
+  const [bStart, bEnd] = b._fileSpan;
+  if (aStart !== bStart) return aStart < bStart;
+  if (aEnd !== bEnd) return aEnd < bEnd;
+  return a.sessionId < b.sessionId;
+}
+
+function mergeCopies(turn, copies, contextTurns) {
+  keepWorkerLink(turn, copies);
+  for (const copy of copies) {
+    if (copy === turn) continue;
+    turn.tools = mergeTools(turn.tools, copy.tools);
+    mergeUsage(turn, copy);
+  }
+
+  // One history entry per session. The original session's billable turn already supplies its history.
+  const seen = new Set([turn.sessionId]);
+  const { input, output, cacheRead, cacheWrite5m, cacheWrite1h, tools } = turn;
+  for (const copy of copies) {
+    const sessionId = copy.kind === 'main' ? copy._contextSessionId : copy.sessionId;
+    if (seen.has(sessionId) || sameWorker(turn, copy)) continue;
+    seen.add(sessionId);
+    contextTurns.push({ ...copy, sessionId, input, output, cacheRead, cacheWrite5m, cacheWrite1h, tools, contextOnly: true });
+  }
+}
+
+function sameWorker(a, b) {
+  if (a.kind !== 'subagent' || b.kind !== 'subagent' || a.parentSessionId !== b.parentSessionId) return false;
+  const fallbackId = a.parentSessionId + '/sidechain';
+  return a.sessionId === b.sessionId ||
+    (a.agentType === 'sidechain' && a.sessionId === fallbackId) ||
+    (b.agentType === 'sidechain' && b.sessionId === fallbackId);
+}
+
+function keepWorkerLink(turn, copies) {
+  if (turn.kind !== 'subagent' || turn.parentToolUseId) return;
+  let linked = null;
+  for (const copy of copies) {
+    if (!copy.parentToolUseId || !sameWorker(turn, copy)) continue;
+    if (linked && linked.parentToolUseId !== copy.parentToolUseId) return;
+    linked = copy;
+  }
+  if (!linked) return;
+  turn.parentToolUseId = linked.parentToolUseId;
+  turn.agentType = linked.agentType;
+  turn.sessionId = linked.sessionId;
+}
+
+function mergeUsage(turn, copy) {
+  // Copies are snapshots of the same response. Cache TTL splits describe one shared total.
+  turn.input = Math.max(turn.input, copy.input);
+  turn.output = Math.max(turn.output, copy.output);
+  turn.cacheRead = Math.max(turn.cacheRead, copy.cacheRead);
+  const writes = turn.cacheWrite5m + turn.cacheWrite1h;
+  const otherWrites = copy.cacheWrite5m + copy.cacheWrite1h;
+  if (otherWrites > writes || (otherWrites === writes && copy._cacheBreakdown && !turn._cacheBreakdown)) {
+    turn.cacheWrite5m = copy.cacheWrite5m;
+    turn.cacheWrite1h = copy.cacheWrite1h;
+    turn._cacheBreakdown = copy._cacheBreakdown;
+  }
 }
 
 function mergeTools(a, b) {
@@ -139,7 +221,8 @@ function setUsage(t, u) {
   const cc = u.cache_creation || null;
   let w5 = cc ? cc.ephemeral_5m_input_tokens : undefined;
   let w1 = cc ? cc.ephemeral_1h_input_tokens : undefined;
-  if (w5 == null && w1 == null) {
+  t._cacheBreakdown = w5 != null || w1 != null;
+  if (!t._cacheBreakdown) {
     w5 = u.cache_creation_input_tokens || 0;
     w1 = 0;
   }

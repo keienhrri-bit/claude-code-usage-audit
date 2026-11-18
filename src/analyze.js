@@ -13,11 +13,13 @@ export async function analyze(o) {
   const rules = loadRules(o.config, o.extraSessionRules || []);
   const readerSince = o.sinceMs != null ? o.sinceMs - 2 * 86400000 : null; // keep context before the window
 
-  let turns = [];
+  const turns = [];
+  let contextTurns = [];
   const sourceStats = {};
   if (o.claudeDir) {
     const r = await readClaude(o.claudeDir, { sinceMs: readerSince, dedupe: o.dedupe });
     turns.push(...r.turns);
+    contextTurns = r.contextTurns;
     sourceStats.claude = r.stats;
   }
   if (o.codexDir) {
@@ -25,8 +27,9 @@ export async function analyze(o) {
     turns.push(...r.turns);
     sourceStats.codex = r.stats;
   }
+  const sessionTurns = [...turns, ...contextTurns];
   if (o.mergeSubagents) {
-    for (const t of turns) {
+    for (const t of sessionTurns) {
       if (t.kind === 'subagent' && t.parentSessionId) {
         t.kind = 'main';
         t.sessionId = t.parentSessionId;
@@ -43,11 +46,11 @@ export async function analyze(o) {
   }
 
   // Sessions over all loaded turns (context before --since matters for sticky rules and cache gaps).
-  const sessions = groupSessions(turns);
+  const sessions = groupSessions(sessionTurns);
   classifyAll(rules, sessions);
   const ledger = o.ledger ? readLedger(o.ledger, o.zone, o.ledgerFields) : null;
   const taskResult = attributeTasks(sessions, rules, { ...o.taskOpts, ledger });
-  const rewrites = detectRewrites(sessions, o.cacheOpts);
+  const rewrites = detectRewrites(sessions, o.cacheOpts).filter(({ turn }) => !turn.contextOnly);
   for (const ev of rewrites) ev.excess = excessCost(ev, ev.turn.price);
 
   const inWin = (ts) => (o.sinceMs == null || ts >= o.sinceMs) && (o.untilMs == null || ts <= o.untilMs);
@@ -69,8 +72,8 @@ export async function analyze(o) {
     allTurns: turns,
     sessions,
     turns: windowTurns,
-    // Tasks with a launch or an attributed turn in the window; reports count only in-window turns.
-    tasks: taskResult.tasks.filter((k) => inWin(k.ts) || k.turns.some((x) => inWin(x.turn.ts))),
+    // A launch, attributed main turn or linked worker turn brings a task into the report.
+    tasks: taskResult.tasks.filter((k) => inWin(k.ts) || k.turns.some(({ turn }) => inWin(turn.ts)) || k.workerTurns.some((t) => inWin(t.ts))),
     inWin,
     tasksAll: taskResult.tasks,
     rewritesAll: rewrites,

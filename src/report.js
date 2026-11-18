@@ -225,6 +225,7 @@ function summarizeTasks(a, red, top, mainTotal) {
   const byLabel = {};
   let attributedUsd = 0;
   const rows = [];
+  const taskCosts = [];
   const inWin = a.inWin || (() => true);
   for (const task of a.tasks) {
     // Only turns inside the report window, so the shares are of the same main-agent total.
@@ -239,6 +240,7 @@ function summarizeTasks(a, red, top, mainTotal) {
     const worker = emptyBucket();
     for (const t of task.workerTurns) if (inWin(t.ts)) add(worker, t);
     attributedUsd += main.usd;
+    taskCosts.push(main.usd);
     const L = (byLabel[task.label] ??= { tasks: 0, retries: 0, mainUsd: 0, mainRaw: 0, workerUsd: 0, workerRaw: 0, ledgerOk: 0, ledgerFailed: 0 });
     L.tasks++;
     if (task.retryOf) L.retries++;
@@ -268,9 +270,9 @@ function summarizeTasks(a, red, top, mainTotal) {
     for (const k of ['mainUsd', 'workerUsd']) L[k] = round(L[k]);
     for (const k of ['mainRaw', 'workerRaw']) L[k] = Math.round(L[k]);
   }
-  const usdList = rows.map((r) => r.mainUsd || 0).sort((x, y) => x - y);
-  const mid = usdList.length >> 1;
-  const median = !usdList.length ? null : usdList.length % 2 ? usdList[mid] : (usdList[mid - 1] + usdList[mid]) / 2;
+  taskCosts.sort((x, y) => x - y);
+  const mid = Math.floor(taskCosts.length / 2);
+  const median = !taskCosts.length ? null : taskCosts.length % 2 ? taskCosts[mid] : (taskCosts[mid - 1] + taskCosts[mid]) / 2;
   return {
     count: rows.length,
     ledger: a.ledgerInfo.entries ? a.ledgerInfo : null,

@@ -23,13 +23,18 @@ export const DEFAULT_TASK_OPTS = { lookbackMinutes: 30, maxKeyShare: 3, ledgerSl
 
 const PATH_RE = /[^\s"'`<>|;,(){}[\]=]*\/[^\s"'`<>|;,(){}[\]=]+/g;
 const QUOTED_RE = /"([^"\n]+)"|'([^'\n]+)'/g;
-const ARG_RE = /(?:^|\s)--?(?:name|job|jobname|task|out|outdir|output|dir|workdir|brief|file|taskfile|promptfile|prompt-file)[=\s]+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s"']+))/gi;
+const ARG_RE = /(?:^|\s)--?(name|job|jobname|task|out|outdir|output|dir|workdir|brief|file|taskfile|promptfile|prompt-file)[=\s]+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s"']+))/gi;
+const PATH_OPTIONS = new Set(['out', 'outdir', 'output', 'dir', 'workdir', 'brief', 'file', 'taskfile', 'promptfile', 'prompt-file']);
+const CODEX_DIR_RE = /(?:^|[\s;&|()])(?:[^\s"';&|()]+\/)?codex(?:\.exe)?\s+exec\b[^;&|]*\s+-c[=\s]+$/;
+const FILE_EXTENSION_RE = /\.[a-z0-9][a-z0-9_-]*$/;
+
+const SHELL_COMMAND_RE = /(?:^|[\s;&|()])(?:[^\s"';&|()]+\/)?(?:(?:bash|sh|dash|zsh|ksh)(?:\.exe)?\s+(?:-[a-z]+\s+)*-[il]*c[il]*|(?:pwsh|powershell)(?:\.exe)?\s+(?:-\S+\s+)*-(?:c|command))\s+$/;
 
 const LAUNCHER_RE = /\.(ps1|mjs|cjs|js|py|sh|exe|cmd|bat)$/;
 const TASK_FILE_RE = /(brief|task|prompt|report|result|receipt|handoff)/;
 const TOOL_DIR_RE = /^(bin|scripts|skills|programs|tools|node_modules|\.claude|\.codex|scratchpad)$/;
 
-// A quoted string with spaces is one path ("c:/shared work/jobs/a") only when it looks like
+// Without a path option, a quoted string with spaces is one path ("c:/shared work/jobs/a") only when it looks like
 // nothing else: it starts at a root, no second path or flag follows a space, the file name has no
 // space, a "/"-rooted string has no space in its first folder ("/review src/a.ts" is a slash
 // command) and no folder has more than three spaces. Anything else is a command or a prompt and
@@ -46,13 +51,34 @@ function isQuotedPath(q) {
 // Candidate keys of one launch: paths and --name/--out style values. Launcher scripts (and the
 // directories that hold them), the working directory and its parents are not keys.
 export function extractKeys(text, cwd) {
+  return extractTaskKeys(text, cwd).keys;
+}
+
+function extractTaskKeys(text, cwd) {
   const keys = new Set();
+  const outputFiles = new Set();
   const launchers = [];
   const cwdN = cwd ? normalizeText(cwd).replace(/\/+$/, '') : null;
+  const args = [];
   const found = [];
-  const rest = text.replace(QUOTED_RE, (all, a, b) => {
+  // Mask quoted path values before scanning the free text, including inside a shell payload.
+  const scanText = text.replace(ARG_RE, (all, flag, double, single, unquoted) => {
+    const option = flag.toLowerCase();
+    const pathOption = PATH_OPTIONS.has(option);
+    const value = double ?? single ?? unquoted;
+    const quoted = unquoted == null;
+    args.push({ option, value, quoted, pathOption });
+    if (!quoted || !pathOption) return all;
+    found.push(value.trim());
+    const length = value.length + 2;
+    return all.slice(0, -length) + ' '.repeat(length);
+  });
+  const rest = scanText.replace(QUOTED_RE, (all, a, b, index) => {
     const q = (a ?? b).trim();
-    if (!/\s/.test(q) || !isQuotedPath(q)) return all;
+    if (!/\s/.test(q)) return all;
+    const prefix = text.slice(0, index);
+    if (SHELL_COMMAND_RE.test(prefix)) return all;
+    if (!CODEX_DIR_RE.test(prefix) && !isQuotedPath(q)) return all;
     found.push(q);
     return ' ';
   });
@@ -70,12 +96,15 @@ export function extractKeys(text, cwd) {
     if (cwdN && (cwdN === k || cwdN.startsWith(k + '/'))) continue;
     keys.add(k);
   }
-  for (const m of text.matchAll(ARG_RE)) {
-    let v = m[1] ?? m[2] ?? m[3];
-    if (m[3] == null && !isQuotedPath(v.trim())) v = v.trim().split(/\s/)[0]; // quoted prose: first word, as before
-    v = v.trim().replace(/[.:,]+$/, '').replace(/\/+$/, '');
+  for (const { option, value, quoted, pathOption } of args) {
+    let v = value.trim();
+    if (quoted && !pathOption && !isQuotedPath(v)) v = v.split(/\s/)[0];
+    v = v.replace(/[.:,]+$/, '').replace(/\/+$/, '');
+    if (pathOption) v = v.replace(/^\.\//, '');
     const isLauncher = LAUNCHER_RE.test(v) && !TASK_FILE_RE.test(v.split('/').pop());
-    if (v.length >= 6 && /[._/\-0-9]/.test(v) && !isLauncher) keys.add(v);
+    if (v.length < 6 || !/[._/\-0-9]/.test(v) || isLauncher) continue;
+    keys.add(v);
+    if ((option === 'out' || option === 'output') && FILE_EXTENSION_RE.test(v)) outputFiles.add(v);
   }
   const all = [...keys];
   for (const k of all) {
@@ -88,7 +117,7 @@ export function extractKeys(text, cwd) {
       keys.delete(k);
     }
   }
-  return keys;
+  return { keys, outputFiles };
 }
 
 const mentions = (turn, key) => turn.tools.some((c) => c.text.includes(key));
@@ -139,7 +168,7 @@ export function attributeTasks(sessions, rules, opts = {}) {
 
   for (const list of sessions.values()) {
     for (const t of list) {
-      if (t.kind === 'subagent' && t.parentToolUseId) {
+      if (t.kind === 'subagent' && !t.contextOnly && t.parentToolUseId) {
         if (!subByToolUse.has(t.parentToolUseId)) subByToolUse.set(t.parentToolUseId, []);
         subByToolUse.get(t.parentToolUseId).push(t);
       }
@@ -148,10 +177,11 @@ export function attributeTasks(sessions, rules, opts = {}) {
 
   for (const [sid, list] of sessions) {
     for (const t of list) {
-      if (t.kind !== 'main') continue;
+      if (t.kind !== 'main' || t.contextOnly) continue;
       for (const call of t.tools) {
         const label = markerFor(rules, call, t);
         if (!label) continue;
+        const { keys, outputFiles } = extractTaskKeys(call.text, t.cwd);
         const task = {
           id: `T${tasks.length + 1}`,
           label,
@@ -161,7 +191,8 @@ export function attributeTasks(sessions, rules, opts = {}) {
           launchTurn: t,
           callId: call.id,
           text: call.text,
-          keys: extractKeys(call.text, t.cwd),
+          keys,
+          outputFiles,
           ledger: null,
           turns: [],
           workerTurns: subByToolUse.get(call.id) || [],
@@ -205,11 +236,15 @@ export function attributeTasks(sessions, rules, opts = {}) {
   // appears next to more than `maxKeyShare` different sets of other keys (a generic file name
   // shared by unrelated jobs). Relaunching the same job, however often, counts once.
   const lookback = lookbackMinutes * 60000;
-  const related = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
   const companions = new Map();
   for (const task of tasks) {
     for (const k of task.keys) {
-      const others = [...task.keys].filter((o) => !related(o, k)).sort().join('\n');
+      const isDir = k.includes('/') && !FILE_EXTENSION_RE.test(k);
+      const others = [...task.keys].filter((o) => {
+        if (o === k || k.startsWith(o + '/')) return false;
+        // External output files can change across runs of the same job; distinct children still matter.
+        return !isDir || o.startsWith(k + '/') || !task.outputFiles.has(o);
+      }).sort().join('\n');
       if (!companions.has(k)) companions.set(k, new Set());
       companions.get(k).add(others);
     }
@@ -240,7 +275,7 @@ export function attributeTasks(sessions, rules, opts = {}) {
     let prevLinks = [];
     let prevTs = null;
     for (const t of list) {
-      if (t.kind !== 'main') continue;
+      if (t.kind !== 'main' || t.contextOnly) continue;
       const linked = new Map();
       for (const task of sessTasks) if (task.launchTurn === t) linked.set(task, 'launch');
       if (t.tools.length) {

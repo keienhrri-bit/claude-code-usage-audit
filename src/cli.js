@@ -159,7 +159,7 @@ export async function main(argv) {
     if (a.arm.length < 2) throw new Error('compare needs at least two --arm options');
     const arms = a.arm.map((s) => parseArm(zone, s));
     json = compareArms(result, arms);
-    const rows = [['arm', 'main turns', 'main raw', 'main API-equiv', 'vs first', 'subagents', 'tasks', 'cache rewrites', 'active min']];
+    const rows = [['arm', 'main turns', 'main raw', 'main API-equiv', 'vs first', 'subagents', 'tasks launched', 'cache rewrites', 'active min']];
     for (const r of json.arms) rows.push([r.label, r.mainTurns, tok(r.mainRaw), usd(r.mainUsd), pct(r.mainUsdVsFirst), r.subagentRaw ? usd(r.subagentUsd) : '-', r.tasksLaunched, r.cacheRewrites, r.activeMinutes]);
     text = [table(rows), '', ...json.arms.map((r) => `${r.label}: ${r.stretches.join('; ')}`), '', json.note].join('\n');
   }

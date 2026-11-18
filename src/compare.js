@@ -89,7 +89,7 @@ export function compareArms(a, arms) {
     };
   });
   return {
-    note: 'Main-agent usage per arm. Subagent usage found in the logs is listed separately; work done by other CLIs (Codex, agy, ...) is only included if their logs were loaded. A single pair of tasks is an anecdote: repeat each arm on several similar tasks before drawing a conclusion.',
+    note: 'Main-agent usage per arm. Subagent usage is listed separately. Codex usage is included when Codex logs are loaded. A single pair of tasks is an anecdote: repeat each arm on several similar tasks before drawing a conclusion.',
     arms: rows,
   };
 }
