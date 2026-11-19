@@ -45,15 +45,25 @@ export function mtimeMs(p) {
 }
 
 // Stream a file line by line; `onLine` returns nothing. Lines that fail to parse are the
-// caller's problem — we only hand out raw strings.
+// caller's problem — we only hand out raw strings. A file that cannot be opened or read
+// rejects with the file system error. The error is handled here rather than left to readline,
+// which does not end its async iterator on an input error in every Node version.
 export async function eachLine(file, onLine) {
-  const rl = readline.createInterface({
-    input: fs.createReadStream(file, { encoding: 'utf8' }),
-    crlfDelay: Infinity,
+  const input = fs.createReadStream(file, { encoding: 'utf8' });
+  let failed = null;
+  input.on('error', (err) => {
+    failed = failed || err;
   });
+  await new Promise((resolve, reject) => {
+    input.once('open', resolve);
+    input.once('error', reject);
+  });
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+  input.on('error', () => rl.close());
   for await (const line of rl) {
     if (line) onLine(line);
   }
+  if (failed) throw failed;
 }
 
 // eachLine for a file that may not be readable: a file system error (EACCES, ENOENT, EISDIR ...)

@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { cli, cliJson, EX_ARGS, EX, tmpDir, writeLines, asst, usage } from './helpers.js';
-import { walk } from '../src/readers/fsutil.js';
+import { walk, tryEachLine } from '../src/readers/fsutil.js';
 import { readClaude } from '../src/readers/claude.js';
 import { readCodex } from '../src/readers/codex.js';
 
@@ -93,6 +93,19 @@ test('walk: an unreadable subdirectory is reported and skipped; an unreadable ro
   assert.deepEqual(walk(path.join(root, 'nope'), () => true), []);
   assert.throws(() => walk(locked, () => true, { readdir }), /Cannot read .*locked.*EACCES/);
   assert.throws(() => walk(path.join(root, 'ok', 'a.jsonl'), () => true), /ENOTDIR/);
+});
+
+test('tryEachLine returns the file system error instead of hanging or throwing', async () => {
+  const dir = tmpDir();
+  // A directory opens on POSIX and fails on the first read, and fails to open on Windows.
+  assert.equal((await tryEachLine(dir, () => {}))?.code, 'EISDIR');
+  assert.equal((await tryEachLine(path.join(dir, 'missing.jsonl'), () => {}))?.code, 'ENOENT');
+  const f = path.join(dir, 'ok.jsonl');
+  fs.writeFileSync(f, 'a\n\nb\n');
+  const lines = [];
+  assert.equal(await tryEachLine(f, (l) => lines.push(l)), null);
+  assert.deepEqual(lines, ['a', 'b']);
+  await assert.rejects(tryEachLine(f, () => { throw new TypeError('bug in the caller'); }), TypeError);
 });
 
 test('readers return the list of unreadable paths (empty when all is readable)', async () => {
