@@ -5,14 +5,16 @@
 // session_meta carries account identifiers; we never read them into the output.
 
 import path from 'node:path';
-import { walk, eachLine, mtimeMs, toolText, normalizeText } from './fsutil.js';
+import { walk, tryEachLine, mtimeMs, toolText, normalizeText } from './fsutil.js';
 
 const FIELDS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'total_tokens'];
 
 export async function readCodex(root, opts = {}) {
   const { sinceMs = null } = opts;
-  const files = walk(root, (name) => /^rollout-.*\.jsonl$/.test(name));
-  const stats = { files: 0, skippedOld: 0, tokenEvents: 0, duplicateEvents: 0 };
+  const unreadable = [];
+  const onError = (p, err) => unreadable.push({ path: p, code: err?.code || String(err) });
+  const files = walk(root, (name) => /^rollout-.*\.jsonl$/.test(name), { onError });
+  const stats = { files: 0, skippedOld: 0, unreadable: 0, tokenEvents: 0, duplicateEvents: 0 };
   const turns = [];
 
   for (const file of files) {
@@ -20,7 +22,8 @@ export async function readCodex(root, opts = {}) {
       stats.skippedOld++;
       continue;
     }
-    stats.files++;
+    const fileTurns = [];
+    const eventsBefore = [stats.tokenEvents, stats.duplicateEvents];
     let sessionId = path.basename(file, '.jsonl').replace(/^rollout-/, '');
     let parentSessionId = null;
     let kind = 'main';
@@ -31,7 +34,7 @@ export async function readCodex(root, opts = {}) {
     let pendingTools = [];
     let seq = 0;
 
-    await eachLine(file, (line) => {
+    const readError = await tryEachLine(file, (line) => {
       let o;
       try {
         o = JSON.parse(line);
@@ -85,7 +88,7 @@ export async function readCodex(root, opts = {}) {
         const ts = Date.parse(o.timestamp);
         if (Number.isNaN(ts)) return;
         const cached = d.cached_input_tokens || 0;
-        turns.push({
+        fileTurns.push({
           source: 'codex',
           id: `${sessionId}#${seq++}`,
           file,
@@ -108,9 +111,18 @@ export async function readCodex(root, opts = {}) {
         pendingTools = [];
       }
     });
+    if (readError) {
+      // Not readable (permissions, removed meanwhile): leave the whole file out and say so.
+      [stats.tokenEvents, stats.duplicateEvents] = eventsBefore;
+      unreadable.push({ path: file, code: readError.code || String(readError) });
+      continue;
+    }
+    stats.files++;
+    for (const t of fileTurns) turns.push(t);
   }
   stats.uniqueTurns = turns.length;
-  return { turns, stats };
+  stats.unreadable = unreadable.length;
+  return { turns, stats, unreadable };
 }
 
 function argText(a) {

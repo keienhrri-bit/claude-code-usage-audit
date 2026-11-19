@@ -23,9 +23,14 @@ export const DEFAULT_TASK_OPTS = { lookbackMinutes: 30, maxKeyShare: 3, ledgerSl
 
 const PATH_RE = /[^\s"'`<>|;,(){}[\]=]*\/[^\s"'`<>|;,(){}[\]=]+/g;
 const QUOTED_RE = /"([^"\n]+)"|'([^'\n]+)'/g;
-const ARG_RE = /(?:^|\s)--?(name|job|jobname|task|out|outdir|output|dir|workdir|brief|file|taskfile|promptfile|prompt-file)[=\s]+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s"']+))/gi;
-const PATH_OPTIONS = new Set(['out', 'outdir', 'output', 'dir', 'workdir', 'brief', 'file', 'taskfile', 'promptfile', 'prompt-file']);
-const CODEX_DIR_RE = /(?:^|[\s;&|()])(?:[^\s"';&|()]+\/)?codex(?:\.exe)?\s+exec\b[^;&|]*\s+-c[=\s]+$/;
+// `cd` is Codex's `-C` / `--cd`: normalizeText spells `codex exec -C` as `--cd`.
+const ARG_RE = /(?:^|\s)--?(name|job|jobname|task|out|outdir|output|dir|workdir|cd|brief|file|taskfile|promptfile|prompt-file)[=\s]+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s"']+))/gi;
+const PATH_OPTIONS = new Set(['out', 'outdir', 'output', 'dir', 'workdir', 'cd', 'brief', 'file', 'taskfile', 'promptfile', 'prompt-file']);
+// `codex exec -c key=value` / `--config key=value` overrides a config value; it is never a key.
+const CODEX_EXEC_RE = /\bcodex(?:\.exe)?\s+exec\b[^\n;&|]*/g;
+const CODEX_CONFIG_RE = /(^|\s)(?:-c|--config)(?:=|\s+)(?:'[a-z0-9_.-]+=[^'\n]*'|"[a-z0-9_.-]+=[^"\n]*"|[a-z0-9_.-]+=(?:"[^"\n]*"|'[^'\n]*'|[^\s"'])*)/g;
+const maskCodexConfig = (text) =>
+  text.replace(CODEX_EXEC_RE, (seg) => seg.replace(CODEX_CONFIG_RE, (m, lead) => lead + ' '.repeat(m.length - lead.length)));
 const FILE_EXTENSION_RE = /\.[a-z0-9][a-z0-9_-]*$/;
 
 const SHELL_COMMAND_RE = /(?:^|[\s;&|()])(?:[^\s"';&|()]+\/)?(?:(?:bash|sh|dash|zsh|ksh)(?:\.exe)?\s+(?:-[a-z]+\s+)*-[il]*c[il]*|(?:pwsh|powershell)(?:\.exe)?\s+(?:-\S+\s+)*-(?:c|command))\s+$/;
@@ -55,6 +60,7 @@ export function extractKeys(text, cwd) {
 }
 
 function extractTaskKeys(text, cwd) {
+  text = maskCodexConfig(text);
   const keys = new Set();
   const outputFiles = new Set();
   const launchers = [];
@@ -67,7 +73,9 @@ function extractTaskKeys(text, cwd) {
     const pathOption = PATH_OPTIONS.has(option);
     const value = double ?? single ?? unquoted;
     const quoted = unquoted == null;
-    args.push({ option, value, quoted, pathOption });
+    // A working directory (-C / --cd) follows the rules for any other path, not those for
+    // --name style values: `-C "$(cygpath -w "$dir")"` must not make `$(cygpath -w` a key.
+    if (option !== 'cd') args.push({ option, value, quoted, pathOption });
     if (!quoted || !pathOption) return all;
     found.push(value.trim());
     const length = value.length + 2;
@@ -78,7 +86,7 @@ function extractTaskKeys(text, cwd) {
     if (!/\s/.test(q)) return all;
     const prefix = text.slice(0, index);
     if (SHELL_COMMAND_RE.test(prefix)) return all;
-    if (!CODEX_DIR_RE.test(prefix) && !isQuotedPath(q)) return all;
+    if (!isQuotedPath(q)) return all;
     found.push(q);
     return ' ';
   });
@@ -242,8 +250,9 @@ export function attributeTasks(sessions, rules, opts = {}) {
       const isDir = k.includes('/') && !FILE_EXTENSION_RE.test(k);
       const others = [...task.keys].filter((o) => {
         if (o === k || k.startsWith(o + '/')) return false;
-        // External output files can change across runs of the same job; distinct children still matter.
-        return !isDir || o.startsWith(k + '/') || !task.outputFiles.has(o);
+        // Output files (--out x.json) can change across runs of the same job, inside its
+        // directory or elsewhere; distinct child directories still tell jobs apart.
+        return !isDir || !task.outputFiles.has(o);
       }).sort().join('\n');
       if (!companions.has(k)) companions.set(k, new Set());
       companions.get(k).add(others);

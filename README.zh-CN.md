@@ -33,7 +33,7 @@ agy                  1        0           $0.00        not linked
 
 上面是对 `examples/` 里合成日志的部分输出（完整输出见[示例](#示例)）。子代理（subagent）、每次派活的花费和提示缓存（prompt cache）重写都和主代理分开列。
 
-版本 0.1.3，没有发布到 npm。所有数字都是本地日志里的 token 数，加上按标价折算的 API 等价美元估算。它们不是你的账单，也不是 `/usage` 显示的百分比。
+版本 0.1.4，没有发布到 npm。所有数字都是本地日志里的 token 数，加上按标价折算的 API 等价美元估算。它们不是你的账单，也不是 `/usage` 显示的百分比。
 
 ## 为什么做这个
 
@@ -78,7 +78,7 @@ Claude Code 会删除超过 [`cleanupPeriodDays`](https://code.claude.com/docs/e
 `npm run demo` 的完整输出：
 
 ```text
-claude-code-usage-audit 0.1.3
+claude-code-usage-audit 0.1.4
 Local token ledger from session logs. USD is an API-equivalent estimate at list prices, not a subscription bill and not the /usage percentage.
 Window: start .. now (UTC)
 ! No price for model "gpt-demo" (26,500 raw tokens in the window): counted in raw tokens, left out of USD and weighted totals. Add it with --prices.
@@ -144,6 +144,8 @@ claude-code-usage-audit rules                打印默认规则（可作为配�
 ```
 
 常用选项：`--since` / `--until`（只写日期表示整天）、`--tz`（默认 `local`，也可以是 `UTC`、`+05:30` 或 IANA 时区名）、`--claude-dir`、`--codex-dir`、`--no-claude`、`--no-codex`、`--json <file|->`、`--top <n>`、`--no-days`。完整列表见 `--help`。
+
+`--claude-dir` 或 `--codex-dir` 指向的路径不存在、不是目录或者读不了，程序会报错退出。目录下有读不了的子目录或文件时，警告会列出它们，因为这部分用量没有算进合计；加 `--redact` 时只给个数。命令行指定的目录里一个会话日志都没有，也会给出警告。
 
 ### report：主代理、子代理、分类
 
@@ -220,7 +222,7 @@ node bin/claude-code-usage-audit.js compare --arm self=2026-01-05T09:00..2026-01
 node bin/claude-code-usage-audit.js compare --arm a=session:aaaa1111 --arm b=session:bbbb2222
 ```
 
-每个 arm 是一个时间窗口或会话 ID 前缀。表里按 arm 列出主代理用量、子代理用量、该区间内发起的任务数和缓存重写。报告也会列出窗口内有复核轮次或已关联 worker 轮次的早期任务。只比一对只是个例；每种做法在几件相似的任务上各重复几次，再下结论。
+每个 arm 是一个时间窗口或会话 ID 前缀。给了 `--since` / `--until` 时，每个 arm 还会再截到这个范围内。表里按 arm 列出主代理用量、子代理用量、该区间内发起的任务数和缓存重写。报告也会列出窗口内有复核轮次或已关联 worker 轮次的早期任务。只比一对只是个例；每种做法在几件相似的任务上各重复几次，再下结论。
 
 ### 价格和分享
 

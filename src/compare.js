@@ -5,6 +5,7 @@
 //            <label>=session:<id-prefix>          one whole session
 //            <label>=session:<id-prefix>@<A>..<B> part of one session
 // The same label may be given several times; the stretches are added up.
+// Every arm is also limited to the report window (--since/--until).
 
 import { emptyBucket, add } from './analyze.js';
 import { parseTime, parseUntil, fmt } from './time.js';
@@ -37,10 +38,12 @@ export function compareArms(a, arms) {
   const zone = a.opts.zone;
   const out = new Map();
   const all = a.allTurns;
+  const inReport = a.inWin || (() => true);
   for (const arm of arms) {
     if (!out.has(arm.label)) out.set(arm.label, { main: emptyBucket(), subagent: emptyBucket(), tasks: 0, rewrites: 0, rewriteExcess: 0, minutes: 0, stretches: [] });
     const r = out.get(arm.label);
-    const inWin = (ts) => (arm.from == null || ts >= arm.from) && (arm.to == null || ts <= arm.to);
+    const inArm = (ts) => (arm.from == null || ts >= arm.from) && (arm.to == null || ts <= arm.to);
+    const inWin = (ts) => inArm(ts) && inReport(ts);
     const sessOk = (t) => !arm.session || String(t.sessionId).toLowerCase().startsWith(arm.session);
     const mains = all.filter((t) => t.kind === 'main' && sessOk(t) && inWin(t.ts));
     for (const t of mains) add(r.main, t);
@@ -64,7 +67,9 @@ export function compareArms(a, arms) {
       r.minutes += (last - first) / 60000;
       r.stretches.push(`${fmt(zone, first)}..${fmt(zone, last)}${arm.session ? ` (${arm.session})` : ''}`);
     } else {
-      r.stretches.push(`(no main-agent turns for ${arm.session || ''}${arm.from != null ? ` ${fmt(zone, arm.from)}..${fmt(zone, arm.to)}` : ''})`);
+      const outside = all.some((t) => t.kind === 'main' && sessOk(t) && inArm(t.ts));
+      const what = [arm.session, arm.from != null ? `${fmt(zone, arm.from)}..${fmt(zone, arm.to)}` : null].filter(Boolean).join(' ');
+      r.stretches.push(`(no main-agent turns for ${what}${outside ? '; its turns are outside --since/--until' : ''})`);
     }
   }
   const labels = [...out.keys()];
@@ -88,8 +93,9 @@ export function compareArms(a, arms) {
       mainRawVsFirst: base.main.raw ? Math.round((r.main.raw / base.main.raw) * 1000) / 1000 : null,
     };
   });
+  const limited = a.opts.sinceMs != null || a.opts.untilMs != null;
   return {
-    note: 'Main-agent usage per arm. Subagent usage is listed separately. Codex usage is included when Codex logs are loaded. A single pair of tasks is an anecdote: repeat each arm on several similar tasks before drawing a conclusion.',
+    note: `Main-agent usage per arm${limited ? ', counted only inside --since/--until' : ''}. Subagent usage is listed separately. Codex usage is included when Codex logs are loaded. A single pair of tasks is an anecdote: repeat each arm on several similar tasks before drawing a conclusion.`,
     arms: rows,
   };
 }

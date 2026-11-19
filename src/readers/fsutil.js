@@ -2,21 +2,38 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
-// Recursively list files under dir whose name passes `accept`. Missing dir -> [].
-export function walk(dir, accept) {
-  const out = [];
+// Recursively list files under dir whose name passes `accept`. A missing dir is empty; a dir
+// that exists but cannot be read (not a directory, no permission) throws. A subdirectory that
+// cannot be read is passed to `onError(path, error)` and skipped, so the caller can say which
+// part of the logs is missing. `readdir` is replaceable for tests.
+export function walk(dir, accept, { onError = null, readdir = fs.readdirSync } = {}) {
   let entries;
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return out;
+    entries = readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return [];
+    throw new Error(`Cannot read ${dir}: ${err && err.code ? err.code : err}`);
   }
+  return walkEntries(dir, entries, accept, onError, readdir).sort();
+}
+
+function walkEntries(dir, entries, accept, onError, readdir) {
+  const out = [];
   for (const e of entries) {
     const p = path.join(dir, e.name);
-    if (e.isDirectory()) out.push(...walk(p, accept));
-    else if (e.isFile() && accept(e.name, p)) out.push(p);
+    if (e.isDirectory()) {
+      let sub;
+      try {
+        sub = readdir(p, { withFileTypes: true });
+      } catch (err) {
+        // Removed while we were listing: nothing is missing.
+        if (onError && err?.code !== 'ENOENT') onError(p, err);
+        continue;
+      }
+      out.push(...walkEntries(p, sub, accept, onError, readdir));
+    } else if (e.isFile() && accept(e.name, p)) out.push(p);
   }
-  return out.sort();
+  return out;
 }
 
 export function mtimeMs(p) {
@@ -36,6 +53,18 @@ export async function eachLine(file, onLine) {
   });
   for await (const line of rl) {
     if (line) onLine(line);
+  }
+}
+
+// eachLine for a file that may not be readable: a file system error (EACCES, ENOENT, EISDIR ...)
+// is returned instead of thrown. Errors from `onLine` itself still throw.
+export async function tryEachLine(file, onLine) {
+  try {
+    await eachLine(file, onLine);
+    return null;
+  } catch (err) {
+    if (err && typeof err.code === 'string' && /^E[A-Z]+$/.test(err.code)) return err;
+    throw err;
   }
 }
 
@@ -66,7 +95,11 @@ function safeJson(v) {
   }
 }
 
+// Codex's `-C <dir>` is spelled `--cd <dir>` (its long form) before lower-casing, so that it
+// stays apart from `-c key=value` (a config override).
+const CODEX_CD_RE = /(\bcodex(?:\.exe)?\s+exec\b[^\n;&|]*?\s)-C(?=[\s=])/g;
+
 // Lower-case, forward slashes. Rules and keys are matched against this form.
 export function normalizeText(s) {
-  return String(s || '').toLowerCase().replace(/\\\\/g, '/').replace(/\\/g, '/');
+  return String(s || '').replace(CODEX_CD_RE, '$1--cd').toLowerCase().replace(/\\\\/g, '/').replace(/\\/g, '/');
 }

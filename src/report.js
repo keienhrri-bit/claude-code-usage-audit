@@ -320,7 +320,7 @@ export function renderSummary(s, { days = true } = {}) {
   for (const w of s.warnings) L.push(`! ${w}`);
   for (const [src, p] of Object.entries(s.parsing)) {
     if (src === 'claude') {
-      L.push(`Claude logs: ${p.files} files, ${p.assistantLines} assistant lines -> ${p.uniqueTurns} unique responses (${p.linesPerUniqueTurn} lines each; ${p.crossFileDuplicates} copies in other files dropped)`);
+      L.push(`Claude logs: ${p.files} files, ${p.assistantLines} assistant lines -> ${p.uniqueTurns} unique responses (${p.linesPerUniqueTurn ?? '-'} lines each; ${p.crossFileDuplicates} copies in other files dropped)`);
     } else {
       L.push(`Codex logs: ${p.files} files, ${p.tokenEvents} token_count events, ${p.duplicateEvents} repeated events dropped -> ${p.uniqueTurns} turns`);
     }

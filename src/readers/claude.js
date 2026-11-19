@@ -12,15 +12,17 @@
 // become a session of their own, `<session>/<agentId or "sidechain">`, linked to the parent.
 
 import path from 'node:path';
-import { walk, eachLine, mtimeMs, readJsonMaybe, toolText, normalizeText } from './fsutil.js';
+import { walk, tryEachLine, mtimeMs, readJsonMaybe, toolText, normalizeText } from './fsutil.js';
 
 // Cheap pre-filter before JSON.parse; allows whitespace around the colon.
 const ASSISTANT_RE = /"type"\s*:\s*"assistant"/;
 
 export async function readClaude(root, opts = {}) {
   const { sinceMs = null, dedupe = 'global' } = opts;
-  const files = walk(root, (name) => name.endsWith('.jsonl'));
-  const stats = { files: 0, skippedOld: 0, assistantLines: 0, perFileUnique: 0, crossFileDuplicates: 0 };
+  const unreadable = [];
+  const onError = (p, err) => unreadable.push({ path: p, code: err?.code || String(err) });
+  const files = walk(root, (name) => name.endsWith('.jsonl'), { onError });
+  const stats = { files: 0, skippedOld: 0, unreadable: 0, assistantLines: 0, perFileUnique: 0, crossFileDuplicates: 0 };
   const byId = new Map();
   const duplicates = new Map();
   const turns = [];
@@ -31,7 +33,6 @@ export async function readClaude(root, opts = {}) {
       stats.skippedOld++;
       continue;
     }
-    stats.files++;
     const parts = file.split(/[\\/]/);
     const subIdx = parts.lastIndexOf('subagents');
     const isSubFile = subIdx > 0;
@@ -42,8 +43,9 @@ export async function readClaude(root, opts = {}) {
     const fileSessionId = isSubFile ? parts[subIdx - 1] : path.basename(file, '.jsonl');
     let sessionId = fileSessionId;
     let mainSessionId = fileSessionId;
+    const linesBefore = stats.assistantLines;
 
-    await eachLine(file, (line) => {
+    const readError = await tryEachLine(file, (line) => {
       const isAssistant = ASSISTANT_RE.test(line);
       const isCompact = !isAssistant && line.includes('"compact_boundary"');
       if (!isAssistant && !isCompact) return;
@@ -103,6 +105,13 @@ export async function readClaude(root, opts = {}) {
         }
       }
     });
+    if (readError) {
+      // Not readable (permissions, removed meanwhile): leave the whole file out and say so.
+      stats.assistantLines = linesBefore;
+      unreadable.push({ path: file, code: readError.code || String(readError) });
+      continue;
+    }
+    stats.files++;
 
     stats.perFileUnique += fileTurns.size;
     let fileStart = Infinity;
@@ -131,11 +140,13 @@ export async function readClaude(root, opts = {}) {
       if (preferredCopy(t, prev)) byId.set(t.id, t);
     }
   }
+  const workerLinks = new Map(); // fallback session -> Map(worker session -> linked copy)
   for (const [id, turn] of byId) {
     const copies = duplicates.get(id);
-    if (copies) mergeCopies(turn, copies, contextTurns);
+    if (copies) mergeCopies(turn, copies, contextTurns, workerLinks);
     turns.push(turn);
   }
+  joinFallbackSessions([...turns, ...contextTurns], workerLinks);
   for (const t of [...turns, ...contextTurns]) {
     delete t._fileSpan;
     delete t._ownTranscript;
@@ -143,7 +154,8 @@ export async function readClaude(root, opts = {}) {
     delete t._cacheBreakdown;
   }
   stats.uniqueTurns = turns.length;
-  return { turns, stats, contextTurns };
+  stats.unreadable = unreadable.length;
+  return { turns, stats, contextTurns, unreadable };
 }
 
 function preferredCopy(a, b) {
@@ -157,13 +169,16 @@ function preferredCopy(a, b) {
   return a.sessionId < b.sessionId;
 }
 
-function mergeCopies(turn, copies, contextTurns) {
-  keepWorkerLink(turn, copies);
+function mergeCopies(turn, copies, contextTurns, workerLinks) {
+  keepWorkerLink(turn, copies, workerLinks);
+  const writes = cacheWriteSource(turn, copies);
   for (const copy of copies) {
     if (copy === turn) continue;
     turn.tools = mergeTools(turn.tools, copy.tools);
     mergeUsage(turn, copy);
   }
+  turn.cacheWrite5m = writes.cacheWrite5m;
+  turn.cacheWrite1h = writes.cacheWrite1h;
 
   // One history entry per session. The original session's billable turn already supplies its history.
   const seen = new Set([turn.sessionId]);
@@ -184,7 +199,7 @@ function sameWorker(a, b) {
     (b.agentType === 'sidechain' && b.sessionId === fallbackId);
 }
 
-function keepWorkerLink(turn, copies) {
+function keepWorkerLink(turn, copies, workerLinks) {
   if (turn.kind !== 'subagent' || turn.parentToolUseId) return;
   let linked = null;
   for (const copy of copies) {
@@ -193,23 +208,51 @@ function keepWorkerLink(turn, copies) {
     linked = copy;
   }
   if (!linked) return;
+  if (turn.sessionId === turn.parentSessionId + '/sidechain' && turn.sessionId !== linked.sessionId) {
+    if (!workerLinks.has(turn.sessionId)) workerLinks.set(turn.sessionId, new Map());
+    workerLinks.get(turn.sessionId).set(linked.sessionId, linked);
+  }
   turn.parentToolUseId = linked.parentToolUseId;
   turn.agentType = linked.agentType;
   turn.sessionId = linked.sessionId;
 }
 
+// Main-log sidechain records without agentId share the fallback session `<session>/sidechain`.
+// If its linked turns all point to one subagent transcript, the whole fallback session is that
+// worker: its other turns move there too, so the worker's history stays in one session (cache
+// continuity) and all of its usage is linked to the launch. Linked to several transcripts, only
+// the linked turns move.
+function joinFallbackSessions(all, workerLinks) {
+  for (const [fallback, targets] of workerLinks) {
+    if (targets.size !== 1) continue;
+    const [worker] = targets.values();
+    for (const t of all) {
+      if (t.sessionId !== fallback) continue;
+      t.sessionId = worker.sessionId;
+      t.parentToolUseId = t.parentToolUseId || worker.parentToolUseId;
+      t.agentType = worker.agentType;
+    }
+  }
+}
+
 function mergeUsage(turn, copy) {
-  // Copies are snapshots of the same response. Cache TTL splits describe one shared total.
+  // Copies are snapshots of the same response; cache writes are picked in cacheWriteSource.
   turn.input = Math.max(turn.input, copy.input);
   turn.output = Math.max(turn.output, copy.output);
   turn.cacheRead = Math.max(turn.cacheRead, copy.cacheRead);
-  const writes = turn.cacheWrite5m + turn.cacheWrite1h;
-  const otherWrites = copy.cacheWrite5m + copy.cacheWrite1h;
-  if (otherWrites > writes || (otherWrites === writes && copy._cacheBreakdown && !turn._cacheBreakdown)) {
-    turn.cacheWrite5m = copy.cacheWrite5m;
-    turn.cacheWrite1h = copy.cacheWrite1h;
-    turn._cacheBreakdown = copy._cacheBreakdown;
-  }
+}
+
+// The cache TTL split describes one shared total: take the copy with the largest total; among
+// those, the billable copy if it has its own split, else the detailed split with the most
+// 1-hour writes (the higher cost). The result does not depend on the order files are read.
+function cacheWriteSource(turn, copies) {
+  const total = (c) => c.cacheWrite5m + c.cacheWrite1h;
+  const max = Math.max(...copies.map(total));
+  const top = copies.filter((c) => total(c) === max);
+  if (top.includes(turn) && turn._cacheBreakdown) return turn;
+  const detailed = top.filter((c) => c._cacheBreakdown);
+  if (!detailed.length) return top[0];
+  return detailed.reduce((best, c) => (c.cacheWrite1h > best.cacheWrite1h ? c : best));
 }
 
 function mergeTools(a, b) {

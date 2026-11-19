@@ -1,4 +1,4 @@
-// Regression tests for findings from the two code reviews.
+// Regression tests for findings from the code reviews.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -91,7 +91,7 @@ test('explicit quoted path arguments keep spaces in their last segment', () => {
   const { tasks } = run([launch('alpha one', 0), launch('alpha two', 5)]);
   assert.deepEqual(tasks.map((t) => [...t.keys]), [['c:/jobs/alpha one'], ['c:/jobs/alpha two']]);
   assert.deepEqual(tasks.map((t) => t.retryOf), [null, null]);
-  assert.deepEqual([...extractKeys('codex exec -c "c:/jobs/alpha one"', null)], ['c:/jobs/alpha one']);
+  assert.deepEqual([...extractKeys(normalizeText('codex exec -C "c:/jobs/alpha one"'), null)], ['c:/jobs/alpha one']);
   assert.deepEqual([...extractKeys("codex exec --out='src/jobs/alpha two'", null)], ['src/jobs/alpha two']);
   const nested = 'bash -c \'/w/tools/run.sh --out "src/jobs/alpha two"\'';
   assert.deepEqual([...extractKeys(nested, null)], ['src/jobs/alpha two']);
@@ -129,7 +129,8 @@ test('worker usage documentation limits source totals to loaded Codex logs', () 
 });
 
 test('the 0.1.1 changelog scopes regression coverage to behavior fixes', () => {
-  const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+  // A CRLF checkout must read the same summary line.
+  const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8').replace(/\r\n/g, '\n');
   const release = changelog.match(/^## 0\.1\.1 [^\n]*\n+([^]*?)(?=^## )/m)[1];
   const [summary] = release.split(/\r?\n/);
   assert.doesNotMatch(summary, /\bEach has a regression test\b/);
@@ -305,4 +306,94 @@ test('--redact hides the path of a --prices file', () => {
     assert.ok(!t.out.includes(needle), `${cmd} text output`);
   }
   assert.ok(cliJson([...EX_ARGS, '--prices', f]).options.prices.includes(needle), 'shown without --redact');
+});
+
+// ---------- third review (0.1.4) ----------
+
+test('one job directory with four different output files is three retries', () => {
+  const dir = '/w/jobs/common';
+  const { tasks } = run(['r1', 'r2', 'r3', 'r4'].map((name, i) => turn({
+    ts: at(i * 10),
+    tools: [call('Bash', `codex exec --dir ${dir} --out ${dir}/${name}.json`)],
+  })));
+  assert.deepEqual(tasks.map((t) => t.retryOf), [null, 'T1', 'T1', 'T1']);
+  assert.ok(tasks.every((t) => t.keys.has(dir)));
+});
+
+test('codex exec: -c is a config override, -C / --cd is the working directory', () => {
+  const keys = (command) => [...extractKeys(normalizeText(command), null)].sort();
+  assert.deepEqual(keys(`codex exec -c 'model="vendor/model name"' -C /w/jobs/a1 "go"`), ['/w/jobs/a1']);
+  assert.deepEqual(keys('codex exec -c model="vendor/model name" --cd /w/jobs/a2 "go"'), ['/w/jobs/a2']);
+  assert.deepEqual(keys('codex exec -C "C:\\Shared Work\\jobs\\alpha one" "go"'), ['c:/shared work/jobs/alpha one']);
+  assert.deepEqual(keys('codex exec --cd="/home/u/my jobs/beta" "go"'), ['/home/u/my jobs/beta']);
+  // A shell substitution as the directory is cut at its inner quote; the fragment is no key.
+  assert.ok(!keys('codex exec -C "$(cygpath -w "$s/proj3")" "go"').some((k) => k.includes('cygpath')));
+  assert.deepEqual(keys('codex exec -C jobs1 "go"'), [], 'a bare word is no path, as before');
+  // bash -c is still a command, and other tools' -C is left alone.
+  assert.deepEqual(keys("bash -c 'codex exec -C /w/jobs/a3 \"go\"'"), ['/w/jobs/a3']);
+  assert.equal(normalizeText('git -C /w/repo status'), 'git -c /w/repo status');
+  const { tasks } = run(['a1', 'a2'].map((j, i) => turn({
+    ts: at(i * 10),
+    tools: [call('Bash', `codex exec -c 'model="vendor/model name"' -C /w/jobs/${j} "go"`)],
+  })));
+  assert.deepEqual(tasks.map((t) => t.retryOf), [null, null], 'a shared config value does not link two jobs');
+});
+
+test('cache write split of copies with equal totals does not depend on file order', async () => {
+  const results = [];
+  for (const [a, b] of [[{ w5: 10000, w1: 20000 }, { w5: 20000, w1: 10000 }], [{ w5: 20000, w1: 10000 }, { w5: 10000, w1: 20000 }]]) {
+    const root = tmpDir();
+    const line = (u) => asst({ sid: 'S1', id: 'm1', ts: '2026-01-05T09:00:00Z', u });
+    // The billable copy is in the session's own transcript and has only the total.
+    writeLines(path.join(root, 'p', 'S1.jsonl'), [line(usage(1, 1, { w5: 30000, breakdown: false }))]);
+    writeLines(path.join(root, 'p', 'A.jsonl'), [line(usage(1, 1, a))]);
+    writeLines(path.join(root, 'p', 'B.jsonl'), [line(usage(1, 1, b))]);
+    const { turns } = await readClaude(root);
+    const m = turns.find((t) => t.id === 'm1');
+    results.push([m.sessionId, m.cacheWrite5m, m.cacheWrite1h]);
+  }
+  assert.deepEqual(results[0], results[1]);
+  // Of two conflicting detailed splits, the one with more 1-hour writes (the higher cost) is kept.
+  assert.deepEqual(results[0], ['S1', 10000, 20000]);
+});
+
+// Sidechain records in the main log without agentId share the fallback session S1/sidechain.
+// When those turns are linked to exactly one subagent transcript, the whole history moves there.
+function sidechainCase({ mainSide, subFiles }) {
+  const root = tmpDir();
+  const launches = subFiles.map((s, i) => asst({ sid: 'S1', id: `launch-${s.agent}`, ts: `2026-01-05T09:0${i}:00Z`, u: usage(1, 1), content: [toolUse('Agent', { description: `task ${s.agent}` }, `toolu_${s.agent}`)] }));
+  writeLines(path.join(root, 'p', 'S1.jsonl'), [...launches, ...mainSide.map((t) => asst({ sid: 'S1', id: t.id, ts: t.ts, u: t.u, extra: { isSidechain: true } }))]);
+  for (const s of subFiles) {
+    const dir = path.join(root, 'p', 'S1', 'subagents');
+    writeLines(path.join(dir, `agent-${s.agent}.jsonl`), s.turns.map((t) => asst({ sid: 'S1', id: t.id, ts: t.ts, u: t.u, extra: { isSidechain: true, agentId: s.agent } })));
+    writeJson(path.join(dir, `agent-${s.agent}.meta.json`), { agentType: 'reviewer', toolUseId: `toolu_${s.agent}` });
+  }
+  return cliJson(['--claude-dir', root, '--no-codex', '--tz', 'UTC']);
+}
+const sc1 = { id: 'sc1', ts: '2026-01-05T09:05:00Z', u: usage(10, 10, { w5: 25000 }) };
+const sc2 = { id: 'sc2', ts: '2026-01-05T09:06:00Z', u: usage(10, 10, { w5: 22000, cr: 25000 }) };
+const sc3 = { id: 'sc3', ts: '2026-01-05T09:07:00Z', u: usage(10, 10, { cr: 47000 }) };
+const RAW1 = 10 + 10 + 25000;
+const RAW2 = 10 + 10 + 22000 + 25000;
+const RAW3 = 10 + 10 + 47000;
+
+test('worker link: an earlier sidechain turn only in the main log stays with the same worker', () => {
+  const s = sidechainCase({ mainSide: [sc1, sc2], subFiles: [{ agent: 'worker', turns: [sc2] }] });
+  assert.equal(s.totals.bySource.claude.subagent.turns, 2);
+  assert.equal(s.tasks.all[0].workerRaw, RAW1 + RAW2, 'both turns are the worker\'s');
+  assert.equal(s.cache.coldStarts.events, 1, 'the second turn continues the first one\'s cache');
+  assert.equal(s.cache.events, 0);
+});
+
+test('worker link: main-log copies of later turns join the transcript that has the first one', () => {
+  const s = sidechainCase({ mainSide: [sc2, sc3], subFiles: [{ agent: 'worker', turns: [sc1, sc2, sc3] }] });
+  assert.equal(s.totals.bySource.claude.subagent.turns, 3);
+  assert.equal(s.tasks.all[0].workerRaw, RAW1 + RAW2 + RAW3);
+  assert.equal(s.cache.coldStarts.events, 1);
+  assert.equal(s.cache.events, 0);
+});
+
+test('worker link: two workers in one fallback session are not merged', () => {
+  const s = sidechainCase({ mainSide: [sc1, sc2], subFiles: [{ agent: 'aa', turns: [sc1] }, { agent: 'bb', turns: [sc2] }] });
+  assert.deepEqual(s.tasks.all.map((t) => t.workerRaw), [RAW1, RAW2]);
 });

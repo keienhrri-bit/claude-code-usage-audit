@@ -108,13 +108,16 @@ export async function main(argv) {
   const claudeDir = a.noClaude ? null : a.claudeDir || defaultClaudeDir();
   const codexDir = a.noCodex ? null : a.codexDir || defaultCodexDir();
   for (const [name, d, explicit] of [['--claude-dir', claudeDir, a.claudeDir], ['--codex-dir', codexDir, a.codexDir]]) {
-    if (d && explicit && !fs.existsSync(d)) throw new Error(`${name} ${d} does not exist`);
+    if (!d || !explicit) continue;
+    if (!fs.existsSync(d)) throw new Error(`${name} ${d} does not exist`);
+    if (!fs.statSync(d).isDirectory()) throw new Error(`${name} ${d} is not a directory`);
   }
 
   const opts = {
     zone,
     claudeDir: claudeDir && fs.existsSync(claudeDir) ? claudeDir : null,
     codexDir: codexDir && fs.existsSync(codexDir) ? codexDir : null,
+    explicitDirs: { claude: !!(claudeDir && a.claudeDir), codex: !!(codexDir && a.codexDir) },
     sinceMs: a.since ? parseTime(zone, a.since) : null,
     untilMs: a.until ? parseUntil(zone, a.until) : null,
     config,
@@ -134,6 +137,8 @@ export async function main(argv) {
   if (!opts.claudeDir && !opts.codexDir) throw new Error('No log directory found. Pass --claude-dir or --codex-dir.');
 
   const result = await analyze(opts);
+  // The report shows its warnings; the other commands don't, so problems reading the logs go to stderr.
+  if (cmd !== 'report') for (const w of result.readWarnings) process.stderr.write(`! ${w}\n`);
   const top = a.top ? Number(a.top) : 10;
   if (a.cwdRule.length) result.opts.config = a.config ? `${a.config} + --cwd-rule` : '--cwd-rule';
   const summary = buildSummary(result, VERSION, { top });

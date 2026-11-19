@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { readClaude } from './readers/claude.js';
 import { readCodex } from './readers/codex.js';
 import { loadPrices, turnCost, turnWeighted, rawTotal } from './prices.js';
@@ -16,17 +17,22 @@ export async function analyze(o) {
   const turns = [];
   let contextTurns = [];
   const sourceStats = {};
+  // Problems with the log directories themselves: the CLI also prints these to stderr.
+  const readWarnings = [];
   if (o.claudeDir) {
     const r = await readClaude(o.claudeDir, { sinceMs: readerSince, dedupe: o.dedupe });
-    turns.push(...r.turns);
+    for (const t of r.turns) turns.push(t);
     contextTurns = r.contextTurns;
     sourceStats.claude = r.stats;
+    readWarnings.push(...dirWarnings(o, 'claude', o.claudeDir, r));
   }
   if (o.codexDir) {
     const r = await readCodex(o.codexDir, { sinceMs: readerSince });
-    turns.push(...r.turns);
+    for (const t of r.turns) turns.push(t);
     sourceStats.codex = r.stats;
+    readWarnings.push(...dirWarnings(o, 'codex', o.codexDir, r));
   }
+  warnings.push(...readWarnings);
   const sessionTurns = [...turns, ...contextTurns];
   if (o.mergeSubagents) {
     for (const t of sessionTurns) {
@@ -68,6 +74,7 @@ export async function analyze(o) {
     prices,
     rules,
     warnings,
+    readWarnings,
     sourceStats,
     allTurns: turns,
     sessions,
@@ -80,6 +87,35 @@ export async function analyze(o) {
     ledgerInfo: { entries: taskResult.ledgerEntries, matched: taskResult.ledgerMatched },
     rewrites: rewrites.filter((e) => inWin(e.turn.ts)),
   };
+}
+
+const SOURCE_LOGS = {
+  claude: { name: 'Claude Code', files: '*.jsonl', flag: '--claude-dir' },
+  codex: { name: 'Codex', files: 'rollout-*.jsonl', flag: '--codex-dir' },
+};
+const SHOW_PATHS = 5;
+
+// A directory given on the command line with no logs in it, and parts of a log directory that
+// could not be read, would otherwise look like zero usage. --redact names neither the
+// directory nor the paths below it (Claude project folder names are working directories).
+function dirWarnings(o, source, root, r) {
+  const s = SOURCE_LOGS[source];
+  const where = o.redact ? `the ${s.name} log directory` : root;
+  const out = [];
+  const found = r.stats.files + r.stats.skippedOld + r.unreadable.length;
+  if (!found && o.explicitDirs && o.explicitDirs[source]) {
+    out.push(`No ${s.name} session logs (${s.files}) found under ${o.redact ? s.flag : root}. Check the path given to ${s.flag}.`);
+  }
+  if (r.unreadable.length) {
+    const codes = [...new Set(r.unreadable.map((u) => u.code))].join(', ');
+    let msg = `Could not read ${r.unreadable.length} path${r.unreadable.length > 1 ? 's' : ''} under ${where} (${codes}); their usage is missing from this report`;
+    if (!o.redact) {
+      const shown = r.unreadable.slice(0, SHOW_PATHS).map((u) => path.relative(root, u.path) || u.path);
+      msg += `: ${shown.join(', ')}${r.unreadable.length > SHOW_PATHS ? `, and ${r.unreadable.length - SHOW_PATHS} more` : ''}`;
+    }
+    out.push(msg + '.');
+  }
+  return out;
 }
 
 export function groupSessions(turns) {

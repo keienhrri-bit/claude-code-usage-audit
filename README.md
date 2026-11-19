@@ -33,7 +33,7 @@ agy                  1        0           $0.00        not linked
 
 Part of the output for the synthetic logs in `examples/` (full output under [Example](#example)). Subagents, the cost of each hand-off and prompt-cache rewrites are listed separately from the main agent.
 
-Version 0.1.3. Not published on npm. All numbers are token counts from local logs, plus API-equivalent dollar estimates at list prices. They are not your bill and not the percentage `/usage` shows.
+Version 0.1.4. Not published on npm. All numbers are token counts from local logs, plus API-equivalent dollar estimates at list prices. They are not your bill and not the percentage `/usage` shows.
 
 ## Why
 
@@ -78,7 +78,7 @@ Claude Code deletes session data older than [`cleanupPeriodDays`](https://code.c
 `npm run demo` prints:
 
 ```text
-claude-code-usage-audit 0.1.3
+claude-code-usage-audit 0.1.4
 Local token ledger from session logs. USD is an API-equivalent estimate at list prices, not a subscription bill and not the /usage percentage.
 Window: start .. now (UTC)
 ! No price for model "gpt-demo" (26,500 raw tokens in the window): counted in raw tokens, left out of USD and weighted totals. Add it with --prices.
@@ -144,6 +144,8 @@ claude-code-usage-audit rules                print the default rules (start of a
 ```
 
 Common options: `--since` / `--until` (a bare date means the whole day), `--tz` (`local` by default, or `UTC`, `+05:30`, an IANA name), `--claude-dir`, `--codex-dir`, `--no-claude`, `--no-codex`, `--json <file|->`, `--top <n>`, `--no-days`. Run `--help` for the full list.
+
+A `--claude-dir` or `--codex-dir` that is missing, is not a directory or cannot be read stops the run with an error. Folders and files below it that cannot be read are named in a warning, because their usage is missing from the totals; `--redact` gives only their number. A directory given on the command line that holds no session logs also gets a warning.
 
 ### report: main agent, subagents, categories
 
@@ -220,7 +222,7 @@ node bin/claude-code-usage-audit.js compare --arm self=2026-01-05T09:00..2026-01
 node bin/claude-code-usage-audit.js compare --arm a=session:aaaa1111 --arm b=session:bbbb2222
 ```
 
-Each arm is a time window or a session id prefix. The table shows main-agent usage, subagents, tasks launched in the arm and cache rewrites. The report also lists older tasks with a review or linked worker turn inside the report window. A single pair is an anecdote; repeat each arm on several similar tasks before drawing a conclusion.
+Each arm is a time window or a session id prefix. With `--since` / `--until`, every arm is cut to that window as well. The table shows main-agent usage, subagents, tasks launched in the arm and cache rewrites. The report also lists older tasks with a review or linked worker turn inside the report window. A single pair is an anecdote; repeat each arm on several similar tasks before drawing a conclusion.
 
 ### Prices and sharing
 

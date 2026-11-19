@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.4 - 2026-11-19
+
+Behavior fixes have regression tests in `test/range-and-dirs.test.js` and at the end of `test/review-fixes.test.js`.
+
+- `compare`: arms are cut to `--since` / `--until`. Before, an arm counted main-agent turns, subagents, launches and cache rewrites outside the report window. An arm whose turns all fall outside the window says so.
+- `--claude-dir` / `--codex-dir` that is not a directory (for example a file) or cannot be read is an error. Before, the run went on with zero usage and exit code 0.
+- Folders and log files below a log directory that cannot be read are left out with a warning that names them (`--redact`: only their number), and `parsing.<source>.unreadable` counts them. `cache`, `tasks` and `compare` print these warnings to stderr.
+- A directory given with `--claude-dir` / `--codex-dir` that holds no session logs gets a warning.
+- `tasks`: launches with one job directory and a different output file each time (`--out <dir>/r1.json`, `r2.json`, ...) are retries again. Output files inside the job directory no longer count as separate jobs; child directories still do.
+- `tasks`: `codex exec -C <dir>` and `-c key=value` no longer look the same after lower-casing. `-C` is read as its long form `--cd`, a quoted directory after it stays one key, and a `-c` / `--config` value is never a key, so jobs sharing a config override are not linked.
+- Claude Code reader: main-log sidechain turns without `agentId` that link to a single subagent transcript move there together, so one worker's history is no longer split between two sessions (which counted an extra cold start and left earlier turns out of the worker cost). Turns linked to several transcripts still move one by one.
+- Claude Code reader: when copies of a response have the same cache-write total but different 5-minute / 1-hour splits, the split no longer depends on the order files are read. The billable copy's own split wins; otherwise the split with more 1-hour writes.
+- The log summary line no longer prints `undefined` when no response was read. The 0.1.1 changelog test also passes on a CRLF checkout.
+
 ## 0.1.3 - 2026-11-19
 
 - Task keys preserve quoted path arguments and pick up relative paths inside shell commands. Retry detection distinguishes sibling job directories and accepts changed external output files for repeat launches.
