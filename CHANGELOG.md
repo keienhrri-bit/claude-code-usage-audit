@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3 - 2026-11-18
+## 0.1.3 - 2026-11-19
 
 - Task keys preserve quoted path arguments and pick up relative paths inside shell commands. Retry detection distinguishes sibling job directories and accepts changed external output files for repeat launches.
 - Reports include tasks with linked worker usage inside the window and compute median task costs before rounding. The comparison table labels its count of launches.
